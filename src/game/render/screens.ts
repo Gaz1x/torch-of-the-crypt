@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 
 // ============================================================================
-// ЭКРАНЫ МЕНЮ (стартовый экран и экран поражения)
+// ЭКРАНЫ МЕНЮ (стартовый экран, пауза и экран поражения)
 // Вся статистика и очистка поля остаются в GameScene — здесь только отрисовка.
 // ============================================================================
 
@@ -249,5 +249,98 @@ export function drawGameOverScreen(
     ...statsElements,
     btnBg,
     btnText,
+  ]);
+}
+
+export function drawPauseScreen(
+  scene: Phaser.Scene,
+  overlay: Phaser.GameObjects.Container,
+  onResume: () => void,
+  onRestart: () => void
+): void {
+  // Карточка паузы в стиле остальных экранов
+  const cardBg = scene.add.rectangle(480, 320, 470, 330, 0x090d16, 0.95)
+    .setStrokeStyle(2, 0xf97316);
+  const innerFrame = scene.add.rectangle(480, 320, 454, 314)
+    .setStrokeStyle(1, 0x334155);
+
+  const badge = scene.add.text(480, 190, 'ИГРА ОСТАНОВЛЕНА', {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '12px',
+    fontStyle: 'bold',
+    color: '#fbbf24',
+    letterSpacing: 3,
+  }).setOrigin(0.5);
+
+  const title = scene.add.text(480, 226, 'ПАУЗА', {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '34px',
+    fontStyle: 'bold',
+    color: '#f8fafc',
+  }).setOrigin(0.5);
+
+  const divider = scene.add.rectangle(480, 262, 300, 2, 0x334155);
+
+  const hint = scene.add.text(480, 296, 'ESC — продолжить игру', {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '15px',
+    color: '#cbd5e1',
+  }).setOrigin(0.5);
+
+  // Кнопки на pointerup: глобальный pointerdown в GameScene слушает выстрел,
+  // и с pointerdown клик по кнопке успел бы выстрелить в момент возобновления.
+  const resumeBg = scene.add.rectangle(480, 356, 260, 52, 0xea580c)
+    .setStrokeStyle(2, 0xfed7aa)
+    .setInteractive({ useHandCursor: true });
+
+  const resumeText = scene.add.text(480, 356, 'ПРОДОЛЖИТЬ', {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '16px',
+    fontStyle: 'bold',
+    color: '#ffffff',
+  }).setOrigin(0.5);
+
+  resumeBg.on('pointerover', () => {
+    resumeBg.setFillStyle(0xf97316);
+    resumeBg.setScale(1.03);
+  });
+  resumeBg.on('pointerout', () => {
+    resumeBg.setFillStyle(0xea580c);
+    resumeBg.setScale(1.0);
+  });
+  resumeBg.on('pointerup', () => onResume());
+
+  const restartBg = scene.add.rectangle(480, 421, 260, 52, 0x334155)
+    .setStrokeStyle(2, 0x94a3b8)
+    .setInteractive({ useHandCursor: true });
+
+  const restartText = scene.add.text(480, 421, 'НАЧАТЬ ЗАНОВО', {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '16px',
+    fontStyle: 'bold',
+    color: '#ffffff',
+  }).setOrigin(0.5);
+
+  restartBg.on('pointerover', () => {
+    restartBg.setFillStyle(0x475569);
+    restartBg.setScale(1.03);
+  });
+  restartBg.on('pointerout', () => {
+    restartBg.setFillStyle(0x334155);
+    restartBg.setScale(1.0);
+  });
+  restartBg.on('pointerup', () => onRestart());
+
+  overlay.add([
+    cardBg,
+    innerFrame,
+    badge,
+    title,
+    divider,
+    hint,
+    resumeBg,
+    resumeText,
+    restartBg,
+    restartText,
   ]);
 }

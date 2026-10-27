@@ -11,7 +11,7 @@ import {
   showFloatingText,
 } from './render/effects';
 import { createHud, updateHud, type HudParts } from './render/hud';
-import { drawGameOverScreen, drawStartScreen } from './render/screens';
+import { drawGameOverScreen, drawPauseScreen, drawStartScreen } from './render/screens';
 
 // ============================================================================
 // ОСНОВНАЯ СЦЕНА ИГРЫ
@@ -21,7 +21,7 @@ import { drawGameOverScreen, drawStartScreen } from './render/screens';
 // ============================================================================
 
 export class GameScene extends Phaser.Scene {
-  private gameState: 'START' | 'PLAYING' | 'GAMEOVER' = 'START';
+  private gameState: 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' = 'START';
 
   // Игрок
   private player!: Phaser.GameObjects.Container;
@@ -67,6 +67,7 @@ export class GameScene extends Phaser.Scene {
     DOWN: Phaser.Input.Keyboard.Key;
     RIGHT: Phaser.Input.Keyboard.Key;
     SPACE: Phaser.Input.Keyboard.Key;
+    ESC: Phaser.Input.Keyboard.Key;
   };
 
   // Элементы HUD и UI
@@ -107,8 +108,11 @@ export class GameScene extends Phaser.Scene {
     // игрока отключены, чтобы световой круг не менял размер каждый кадр.
 
     if (this.gameState !== 'PLAYING') {
-      // Легкое вращение рыцаря на фоне в меню для красоты
-      this.player.setRotation(Math.sin(time * 0.0008) * 0.4);
+      // На паузе рыцарь остаётся в прицеле, вращение — только фон в меню
+      if (this.gameState !== 'PAUSED') {
+        // Легкое вращение рыцаря на фоне в меню для красоты
+        this.player.setRotation(Math.sin(time * 0.0008) * 0.4);
+      }
       this.renderDarkness();
       return;
     }
@@ -195,7 +199,12 @@ export class GameScene extends Phaser.Scene {
         DOWN: Phaser.Input.Keyboard.KeyCodes.DOWN,
         RIGHT: Phaser.Input.Keyboard.KeyCodes.RIGHT,
         SPACE: Phaser.Input.Keyboard.KeyCodes.SPACE,
+        ESC: Phaser.Input.Keyboard.KeyCodes.ESC,
       }) as typeof this.keys;
+
+      // ESC переключает паузу. Phaser не шлёт keydown-ESC на автоповтор,
+      // пока объект клавиши есть в addKeys, поэтому хватает одного слушателя.
+      this.input.keyboard.on('keydown-ESC', () => this.togglePause());
     }
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
@@ -572,6 +581,7 @@ export class GameScene extends Phaser.Scene {
     this.manaCollected = 0;
     this.survivalTime = 0;
     this.fireCooldown = 0;
+    this.spawnTimer = 0;
 
     this.uiOverlay.removeAll(true);
     this.hud.container.setVisible(true);
@@ -599,5 +609,32 @@ export class GameScene extends Phaser.Scene {
       },
       () => this.showStartScreen()
     );
+  }
+
+  // ============================================================================
+  // 6. ПАУЗА ПО ESC
+  // ============================================================================
+
+  /** ESC: PLAYING → пауза, PAUSED → продолжить, в меню и на экране смерти — игнор. */
+  private togglePause(): void {
+    if (this.gameState === 'PLAYING') {
+      this.pauseGame();
+    } else if (this.gameState === 'PAUSED') {
+      this.resumeGame();
+    }
+  }
+
+  /** Замораживает партию и рисует экран паузы поверх HUD. */
+  private pauseGame(): void {
+    this.gameState = 'PAUSED';
+    this.uiOverlay.removeAll(true);
+    drawPauseScreen(this, this.uiOverlay, () => this.resumeGame(), () => this.startGame());
+  }
+
+  /** Разморозка: статистика и таймеры не сбрасываются, игра идёт дальше. */
+  private resumeGame(): void {
+    if (this.gameState !== 'PAUSED') return;
+    this.uiOverlay.removeAll(true);
+    this.gameState = 'PLAYING';
   }
 }

@@ -651,7 +651,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Условие смены фазы живёт в core/phases.ts (функция getPhase). */
   private checkPhaseChange(): void {
-    const next = getPhase(this.survivalTime);
+    const next = getPhase(this.score);
     if (next === this.currentPhase) return;
 
     this.currentPhase = next;

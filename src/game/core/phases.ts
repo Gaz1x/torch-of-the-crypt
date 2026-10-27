@@ -1,22 +1,22 @@
 // ============================================================================
 // ФАЗЫ ФАКЕЛА
-// Тайминги, свойства фаз и условие их активации.
+// Пороги очков, свойства фаз и условие их активации.
 //
 // Как менять:
 // - КОГДА фазы переключаются → правится только функция getPhase() внизу;
 // - ЧТО делает фаза (свет, замедление персонажа, уведомление) →
 //   правится только таблица PHASES;
-// - GameScene лишь применяет текущую фазу и о таймингах ничего не знает.
+// - GameScene лишь применяет текущую фазу и о порогах ничего не знает.
 // ============================================================================
 
 export type PhaseKey = 'LIGHT' | 'DARK';
 
-/** Тайминги цикла фаз в секундах от начала партии. */
-export const PHASE_TIMING = {
-  /** Сколько секунд в цикле факел горит. */
-  LIGHT_DURATION: 30,
-  /** Сколько секунд в цикле факел тухнет. */
-  DARK_DURATION: 10,
+/** Пороги очков, при которых факел переключается между фазами. */
+export const PHASE_SCORING = {
+  /** Сколько очков набрать при свете, чтобы факел погас. */
+  LIGHT_SCORE: 20,
+  /** Сколько очков набрать во тьме, чтобы факел загорелся снова. */
+  DARK_SCORE: 10,
 } as const;
 
 /** Уведомление, показываемое на экране при входе в фазу. */
@@ -50,18 +50,22 @@ export const PHASES: Record<PhaseKey, PhaseDefinition> = {
     playerSpeedFactor: 0.8,
     notice: {
       title: 'ФАКЕЛ ПОГАС',
-      body: `Тьма — ${PHASE_TIMING.DARK_DURATION} сек. Ты медленнее, враги свободны`,
+      body: `Набери ещё ${PHASE_SCORING.DARK_SCORE} очков, чтобы вернуть свет`,
       color: '#ef4444',
     },
   },
 };
 
 /**
- * Условие активации фазы: чистая функция от времени выживания.
- * Нужно переключать по счёту, здоровью или любому другому правилу —
- * меняется только эта функция.
+ * Условие активации фазы: чистая функция от общего счёта.
+ * Свет держится, пока набрано меньше LIGHT_SCORE; после этого тьма идёт
+ * ровно DARK_SCORE очков, потом снова свет — и так по кругу.
+ * Нужно другое правило (по времени, здоровью) — меняется только эта функция.
  */
-export function getPhase(elapsedSeconds: number): PhaseKey {
-  const cycle = PHASE_TIMING.LIGHT_DURATION + PHASE_TIMING.DARK_DURATION;
-  return elapsedSeconds % cycle < PHASE_TIMING.LIGHT_DURATION ? 'LIGHT' : 'DARK';
+export function getPhase(totalScore: number): PhaseKey {
+  const { LIGHT_SCORE, DARK_SCORE } = PHASE_SCORING;
+  const inDark = totalScore - LIGHT_SCORE;
+
+  if (inDark < 0) return 'LIGHT';
+  return inDark % (LIGHT_SCORE + DARK_SCORE) < DARK_SCORE ? 'DARK' : 'LIGHT';
 }

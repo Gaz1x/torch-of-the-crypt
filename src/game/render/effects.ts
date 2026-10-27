@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
+import type { PhaseNotice } from '../core/phases';
 
 // ============================================================================
-// ВИЗУАЛЬНЫЕ ЭФФЕКТЫ (искры, взрывы, всплывающий текст)
+// ВИЗУАЛЬНЫЕ ЭФФЕКТЫ (искры, взрывы, всплывающий текст, баннер фазы)
 // ============================================================================
 
 export function createHitSpark(scene: Phaser.Scene, x: number, y: number): void {
@@ -65,5 +66,47 @@ export function showFloatingText(
     alpha: 0,
     duration: 650,
     onComplete: () => txt.destroy(),
+  });
+}
+
+/** Баннер смены фазы: появляется по центру, держится и плавно исчезает. */
+export function showPhaseNotice(scene: Phaser.Scene, notice: PhaseNotice): void {
+  const container = scene.add.container(scene.scale.width / 2, 250).setDepth(45);
+
+  const title = scene.add.text(0, 0, notice.title, {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '44px',
+    fontStyle: 'bold',
+    color: notice.color,
+    stroke: '#0f172a',
+    strokeThickness: 6,
+  }).setOrigin(0.5);
+
+  const body = scene.add.text(0, 46, notice.body, {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: '17px',
+    color: '#e2e8f0',
+    stroke: '#0f172a',
+    strokeThickness: 4,
+  }).setOrigin(0.5);
+
+  container.add([title, body]);
+  container.setAlpha(0);
+  container.setScale(0.9);
+
+  scene.tweens.add({
+    targets: container,
+    alpha: 1,
+    scale: 1,
+    duration: 250,
+    onComplete: () => {
+      scene.tweens.add({
+        targets: container,
+        alpha: 0,
+        delay: 1300,
+        duration: 400,
+        onComplete: () => container.destroy(),
+      });
+    },
   });
 }

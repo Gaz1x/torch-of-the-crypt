@@ -33,7 +33,7 @@ export const GAME_CONFIG = {
     START_Y: 320,
   },
   LIGHT: {
-    DEFAULT_RADIUS: 210, // Статичный радиус света факела
+    // Радиус света зависит от фазы — см. core/phases.ts
     DARKNESS_ALPHA: 0.95,
     DARKNESS_COLOR: 0x03060c,
     AMBIENT_COLOR: 0xff8800,

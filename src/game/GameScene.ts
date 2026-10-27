@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameConfig';
+import { getPhase, PHASES, type PhaseKey } from './core/phases';
 import type { EnemyEntity, ManaOrbEntity, ProjectileEntity } from './core/entities';
 import { drawCryptEnvironment, type WorldCrack } from './render/world';
 import { createPlayer, type PlayerVisual } from './render/playerArt';
@@ -9,6 +10,7 @@ import {
   createDeathEffect,
   createHitSpark,
   showFloatingText,
+  showPhaseNotice,
 } from './render/effects';
 import { createHud, updateHud, type HudParts } from './render/hud';
 import { drawGameOverScreen, drawPauseScreen, drawStartScreen } from './render/screens';
@@ -38,7 +40,9 @@ export class GameScene extends Phaser.Scene {
   private lightCutout!: Phaser.GameObjects.Graphics;
   private smallLightCutout!: Phaser.GameObjects.Graphics;
   private ambientGlow!: Phaser.GameObjects.Arc;
-  private currentLightRadius: number = GAME_CONFIG.LIGHT.DEFAULT_RADIUS;
+  /** Текущая фаза факела: свет и скорость игрока берутся из PHASES. */
+  private currentPhase: PhaseKey = getPhase(0);
+  private currentLightRadius: number = PHASES[getPhase(0)].lightRadius;
 
   // Списки объектов
   private enemies: EnemyEntity[] = [];
@@ -118,6 +122,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.survivalTime += dt;
+    this.checkPhaseChange();
 
     this.mana = Math.min(
       GAME_CONFIG.COMBAT.MAX_MANA,
@@ -229,7 +234,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     const { WIDTH, HEIGHT, PADDING } = GAME_CONFIG.WORLD;
-    const speed = GAME_CONFIG.PLAYER.SPEED;
+    // Замедление действует в фазе, когда факел погас (см. core/phases.ts)
+    const speed = GAME_CONFIG.PLAYER.SPEED * PHASES[this.currentPhase].playerSpeedFactor;
 
     this.playerX = Phaser.Math.Clamp(this.playerX + vx * speed * dt, PADDING, WIDTH - PADDING);
     this.playerY = Phaser.Math.Clamp(this.playerY + vy * speed * dt, PADDING, HEIGHT - PADDING);
@@ -571,8 +577,9 @@ export class GameScene extends Phaser.Scene {
 
     this.hp = GAME_CONFIG.PLAYER.MAX_HP;
     this.mana = GAME_CONFIG.COMBAT.START_MANA;
-    this.currentLightRadius = GAME_CONFIG.LIGHT.DEFAULT_RADIUS;
-    this.rebuildLightBrush(this.currentLightRadius);
+    // Новая партия всегда начинается со светлой фазы
+    this.currentPhase = getPhase(0);
+    this.applyCurrentPhase();
 
     this.score = 0;
     this.killsCount = 0;
@@ -636,5 +643,26 @@ export class GameScene extends Phaser.Scene {
     if (this.gameState !== 'PAUSED') return;
     this.uiOverlay.removeAll(true);
     this.gameState = 'PLAYING';
+  }
+
+  // ============================================================================
+  // 7. ФАЗЫ ФАКЕЛА
+  // ============================================================================
+
+  /** Условие смены фазы живёт в core/phases.ts (функция getPhase). */
+  private checkPhaseChange(): void {
+    const next = getPhase(this.survivalTime);
+    if (next === this.currentPhase) return;
+
+    this.currentPhase = next;
+    this.applyCurrentPhase();
+    showPhaseNotice(this, PHASES[next].notice);
+  }
+
+  /** Применяет свойства текущей фазы: радиус света и свечение вокруг игрока. */
+  private applyCurrentPhase(): void {
+    this.currentLightRadius = PHASES[this.currentPhase].lightRadius;
+    this.rebuildLightBrush(this.currentLightRadius);
+    this.ambientGlow.setRadius(this.currentLightRadius);
   }
 }

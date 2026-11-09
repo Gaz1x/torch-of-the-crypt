@@ -28,21 +28,23 @@ export function drawCryptEnvironment(scene: Phaser.Scene): WorldCrack[] {
   }
 
   bg.fillStyle(0x0f172a, 0.5);
-  for (let i = 0; i < 45; i++) {
-    const rx = Phaser.Math.Between(50, WIDTH - 50);
-    const ry = Phaser.Math.Between(50, HEIGHT - 50);
+  for (let i = 0; i < 60; i++) {
+    const rx = Phaser.Math.Between(60, WIDTH - 60);
+    const ry = Phaser.Math.Between(60, HEIGHT - 60);
     bg.fillCircle(rx, ry, Phaser.Math.Between(4, 14));
   }
 
   // Декоративный рунический круг в центре зала
   bg.lineStyle(2, 0x334155, 0.45);
-  bg.strokeCircle(WIDTH / 2, HEIGHT / 2, 110);
-  bg.strokeCircle(WIDTH / 2, HEIGHT / 2, 85);
+  bg.strokeCircle(WIDTH / 2, HEIGHT / 2, 130);
+  bg.strokeCircle(WIDTH / 2, HEIGHT / 2, 100);
 
   // Каменные колонны
   const pillars = [
-    { x: 192, y: 160 }, { x: 768, y: 160 },
-    { x: 192, y: 480 }, { x: 768, y: 480 },
+    { x: WIDTH * 0.2, y: HEIGHT * 0.25 },
+    { x: WIDTH * 0.8, y: HEIGHT * 0.25 },
+    { x: WIDTH * 0.2, y: HEIGHT * 0.75 },
+    { x: WIDTH * 0.8, y: HEIGHT * 0.75 },
   ];
   for (const p of pillars) {
     bg.fillStyle(0x090d16, 0.7);
@@ -60,11 +62,18 @@ export function drawCryptEnvironment(scene: Phaser.Scene): WorldCrack[] {
   bg.strokeRect(14, 14, WIDTH - 28, HEIGHT - 28);
 
   // Разломы в стенах — точки, из которых появляются враги
+  const edge = 28;
   const cracks: WorldCrack[] = [
-    { x: 28, y: 120 }, { x: 28, y: 320 }, { x: 28, y: 520 },
-    { x: WIDTH - 28, y: 120 }, { x: WIDTH - 28, y: 320 }, { x: WIDTH - 28, y: 520 },
-    { x: 280, y: 28 }, { x: 680, y: 28 },
-    { x: 280, y: HEIGHT - 28 }, { x: 680, y: HEIGHT - 28 },
+    { x: edge, y: HEIGHT * 0.17 },
+    { x: edge, y: HEIGHT * 0.5 },
+    { x: edge, y: HEIGHT * 0.83 },
+    { x: WIDTH - edge, y: HEIGHT * 0.17 },
+    { x: WIDTH - edge, y: HEIGHT * 0.5 },
+    { x: WIDTH - edge, y: HEIGHT * 0.83 },
+    { x: WIDTH * 0.29, y: edge },
+    { x: WIDTH * 0.71, y: edge },
+    { x: WIDTH * 0.29, y: HEIGHT - edge },
+    { x: WIDTH * 0.71, y: HEIGHT - edge },
   ];
 
   for (const c of cracks) {

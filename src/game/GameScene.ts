@@ -1,39 +1,73 @@
 import Phaser from 'phaser';
+import soundtrackUrl from '../assets/audio/soundtrack.mp3';
 import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameConfig';
-import { getPhase, PHASES, type PhaseKey } from './core/phases';
-import type { EnemyEntity, ManaOrbEntity, ProjectileEntity } from './core/entities';
+import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
+import { WAVES, type WaveConfig } from './core/waves';
+import { xpToNextLevel } from './core/progression';
+import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
+import { loadSettings, saveSettings, type GameSettings } from './core/settings';
+import type {
+  EnemyEntity,
+  EnemyProjectileEntity,
+  ManaOrbEntity,
+  ProjectileEntity,
+} from './core/entities';
 import { drawCryptEnvironment, type WorldCrack } from './render/world';
 import { createPlayer, type PlayerVisual } from './render/playerArt';
 import { createEnemyVisual } from './render/enemyArt';
+import { createBossVisual } from './render/bossArt';
 import {
+  clearAllNotices,
   createDamageEffect,
   createDeathEffect,
+  createExplosionEffect,
   createHitSpark,
   showFloatingText,
   showPhaseNotice,
+  showWaveNotice,
 } from './render/effects';
-import { createHud, updateHud, type HudParts } from './render/hud';
-import { drawGameOverScreen, drawPauseScreen, drawStartScreen } from './render/screens';
+import {
+  createHud,
+  hideBossBar,
+  updateHud,
+  type HudParts,
+} from './render/hud';
+import {
+  drawGameOverScreen,
+  drawPauseScreen,
+  drawStartScreen,
+  drawVictoryScreen,
+  type SettingsController,
+} from './render/screens';
 
 // ============================================================================
 // ОСНОВНАЯ СЦЕНА ИГРЫ
 // Здесь живёт состояние партии и игровая логика. Константы и баланс — в
-// core/gameConfig.ts, отрисовка — в папке render/ (world, playerArt,
-// enemyArt, effects, hud, screens).
+// core/gameConfig.ts, волны — в core/waves.ts, босс — в core/bosses.ts,
+// отрисовка — в папке render/.
 // ============================================================================
 
+type GameState = 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' | 'VICTORY';
+
+/** BaseSound в типах Phaser не объявляет setVolume, хотя все реальные звуки его имеют. */
+type VolumeControlledSound = Phaser.Sound.BaseSound & {
+  setVolume(value: number): unknown;
+};
+
 export class GameScene extends Phaser.Scene {
-  private gameState: 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' = 'START';
+  private gameState: GameState = 'START';
 
   // Игрок
   private player!: Phaser.GameObjects.Container;
   private playerVisual!: PlayerVisual;
   private cooldownArc!: Phaser.GameObjects.Graphics;
+  private invulnRing!: Phaser.GameObjects.Arc;
   private playerX: number = GAME_CONFIG.PLAYER.START_X;
   private playerY: number = GAME_CONFIG.PLAYER.START_Y;
   private aimAngle = 0;
   private hp: number = GAME_CONFIG.PLAYER.MAX_HP;
   private mana: number = GAME_CONFIG.COMBAT.START_MANA;
+  private invulnTimer = 0;
 
   // Система Света и Тьмы
   private darknessOverlay!: Phaser.GameObjects.RenderTexture;
@@ -43,15 +77,33 @@ export class GameScene extends Phaser.Scene {
   /** Текущая фаза факела: свет и скорость игрока берутся из PHASES. */
   private currentPhase: PhaseKey = getPhase(0);
   private currentLightRadius: number = PHASES[getPhase(0)].lightRadius;
+  /** Пока > 0, босс гасит факел и радиус света ограничен. */
+  private torchDrainTimer = 0;
 
   // Списки объектов
   private enemies: EnemyEntity[] = [];
   private projectiles: ProjectileEntity[] = [];
+  private enemyProjectiles: EnemyProjectileEntity[] = [];
   private manaOrbs: ManaOrbEntity[] = [];
   private cracks: WorldCrack[] = [];
 
+  // Волны
+  private waveIndex = 0;
+  private waveSpawned = 0;
+  private waveSpawnTimer = 0;
+  private waveTransitionTimer = 0;
+  private waveActive = false;
+  private guaranteedQueue: EnemyTypeKey[] = [];
+  /** Таймер следующего появления свиты босса. */
+  private bossAddsTimer = 0;
+
+  // Звук и настройки
+  private settings: GameSettings = loadSettings();
+  private soundtrack: VolumeControlledSound | null = null;
+  private musicStarted = false;
+  private musicFade?: Phaser.Tweens.Tween;
+
   // Таймеры и Статистика
-  private spawnTimer = 0;
   private fireCooldown = 0;
   private survivalTime = 0;
   private score = 0;
@@ -59,6 +111,12 @@ export class GameScene extends Phaser.Scene {
   private shotsFired = 0;
   private shotsHit = 0;
   private manaCollected = 0;
+  private bossesKilled = 0;
+
+  // Опыт и уровень
+  private level = 1;
+  private xp = 0;
+  private xpToNext = xpToNextLevel(1);
 
   // Клавиши
   private keys!: {
@@ -82,6 +140,10 @@ export class GameScene extends Phaser.Scene {
     super('GameScene');
   }
 
+  preload(): void {
+    this.load.audio('soundtrack', soundtrackUrl);
+  }
+
   create(): void {
     this.cracks = drawCryptEnvironment(this);
 
@@ -97,32 +159,110 @@ export class GameScene extends Phaser.Scene {
     this.player = this.playerVisual.container;
     this.cooldownArc = this.add.graphics().setDepth(13);
 
+    // Кольцо неуязвимости: видно только после полученного урона.
+    this.invulnRing = this.add.circle(
+      this.playerX,
+      this.playerY,
+      GAME_CONFIG.PLAYER.RADIUS + 12,
+      0x38bdf8,
+      0
+    )
+      .setStrokeStyle(2.5, 0x7dd3fc, 0.95)
+      .setDepth(13)
+      .setVisible(false);
+
     this.setupLightingSystem();
     this.setupInputs();
     this.hud = createHud(this);
     this.uiOverlay = this.add.container(0, 0).setDepth(40);
+    this.setupAudio();
 
     this.showStartScreen();
+  }
+
+  // ============================================================================
+  // 0. ЗВУК
+  // ============================================================================
+
+  private setupAudio(): void {
+    this.soundtrack = this.sound.add('soundtrack', {
+      loop: true,
+      volume: 0,
+    }) as VolumeControlledSound;
+
+    this.applyAudioSettings();
+
+    // Браузеры разрешают звук только после жеста пользователя.
+    const startMusic = (): void => this.startMusic();
+    this.input.once('pointerdown', startMusic);
+    this.input.keyboard?.once('keydown', startMusic);
+  }
+
+  private startMusic(): void {
+    if (this.musicStarted || !this.soundtrack) return;
+
+    this.musicStarted = true;
+    this.soundtrack.play();
+    this.fadeMusicTo(this.settings.muted ? 0 : this.settings.musicVolume);
+  }
+
+  private applyAudioSettings(): void {
+    if (!this.soundtrack) return;
+
+    this.musicFade?.remove();
+    this.musicFade = undefined;
+    this.soundtrack.setVolume(this.settings.muted ? 0 : this.settings.musicVolume);
+  }
+
+  private fadeMusicTo(target: number): void {
+    if (!this.soundtrack) return;
+
+    this.musicFade?.remove();
+    const fade = { value: 0 };
+    this.musicFade = this.tweens.add({
+      targets: fade,
+      value: target,
+      duration: 1200,
+      ease: 'Sine.easeOut',
+      onUpdate: () => this.soundtrack?.setVolume(fade.value),
+      onComplete: () => {
+        this.musicFade = undefined;
+      },
+    });
+  }
+
+  private getSettingsController(): SettingsController {
+    const controller: SettingsController = {
+      settings: this.settings,
+      update: (next: GameSettings) => {
+        controller.settings = next;
+        this.settings = next;
+        saveSettings(next);
+        this.applyAudioSettings();
+      },
+    };
+    return controller;
   }
 
   update(time: number, delta: number): void {
     const dt = delta / 1000;
 
-    // Свет статичен: мерцание пламени факела и пульсация свечения вокруг
-    // игрока отключены, чтобы световой круг не менял размер каждый кадр.
-
     if (this.gameState !== 'PLAYING') {
-      // На паузе рыцарь остаётся в прицеле, вращение — только фон в меню
-      if (this.gameState !== 'PAUSED') {
-        // Легкое вращение рыцаря на фоне в меню для красоты
+      // В меню рыцарь медленно поворачивается для красоты. На паузе,
+      // на экране победы и на экране смерти он остаётся на месте.
+      if (this.gameState === 'START') {
         this.player.setRotation(Math.sin(time * 0.0008) * 0.4);
       }
+      this.player.setAlpha(1);
+      this.invulnRing.setVisible(false);
       this.renderDarkness();
       return;
     }
 
     this.survivalTime += dt;
     this.checkPhaseChange();
+    this.updateInvulnerability(time, dt);
+    this.updateTorchDrain(dt);
 
     this.mana = Math.min(
       GAME_CONFIG.COMBAT.MAX_MANA,
@@ -131,12 +271,13 @@ export class GameScene extends Phaser.Scene {
 
     this.handlePlayerMovement(dt);
     this.handleShooting(dt);
-    this.handleSpawning(delta);
+    this.updateWaves(dt);
     this.updateProjectiles(dt);
+    this.updateEnemyProjectiles(dt);
     this.updateManaOrbs(dt, time);
     this.updateEnemies(dt, time);
     this.renderDarkness();
-    this.updateHUD();
+    this.updateHUD(dt);
   }
 
   // ============================================================================
@@ -171,6 +312,14 @@ export class GameScene extends Phaser.Scene {
     this.lightCutout.fillCircle(0, 0, radius * 0.75);
   }
 
+  /** Меняет радиус света только если он действительно изменился. */
+  private setLightRadius(radius: number): void {
+    if (Math.abs(radius - this.currentLightRadius) < 0.5) return;
+    this.currentLightRadius = radius;
+    this.rebuildLightBrush(radius);
+    this.ambientGlow.setRadius(radius);
+  }
+
   private renderDarkness(): void {
     this.darknessOverlay.clear();
     this.darknessOverlay.fill(
@@ -186,6 +335,13 @@ export class GameScene extends Phaser.Scene {
     for (const orb of this.manaOrbs) {
       this.darknessOverlay.erase(this.smallLightCutout, orb.x, orb.y);
     }
+  }
+
+  private updateTorchDrain(dt: number): void {
+    if (this.torchDrainTimer <= 0) return;
+
+    this.torchDrainTimer = Math.max(0, this.torchDrainTimer - dt);
+    this.applyCurrentPhase();
   }
 
   // ============================================================================
@@ -392,88 +548,227 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ============================================================================
-  // 4. МОНСТРЫ
+  // 4. ВОЛНЫ
   // ============================================================================
 
-  private handleSpawning(delta: number): void {
-    this.spawnTimer += delta;
-    const { INITIAL_INTERVAL, MIN_INTERVAL, INTERVAL_DECREASE_PER_SCORE } = GAME_CONFIG.SPAWN;
-    const currentInterval = Math.max(
-      MIN_INTERVAL,
-      INITIAL_INTERVAL - this.score * INTERVAL_DECREASE_PER_SCORE
-    );
+  private updateWaves(dt: number): void {
+    if (this.waveTransitionTimer > 0) {
+      this.waveTransitionTimer -= dt;
+      if (this.waveTransitionTimer <= 0) {
+        this.beginWave(this.waveIndex + 1);
+      }
+      return;
+    }
 
-    if (this.spawnTimer >= currentInterval) {
-      this.spawnTimer = 0;
-      this.spawnRandomEnemy();
+    if (!this.waveActive) return;
+
+    const wave = WAVES[this.waveIndex];
+    if (!wave) return;
+
+    // Боссовая волна заканчивается смертью босса в updateEnemies,
+    // а до тех пор из разломов продолжает лезть свита.
+    if (wave.boss) {
+      this.updateBossAdds(dt, wave);
+      return;
+    }
+
+    if (this.waveSpawned < wave.spawnCount) {
+      this.waveSpawnTimer -= dt;
+
+      if (this.waveSpawnTimer <= 0 && this.enemies.length < wave.maxAlive) {
+        const guaranteed = this.guaranteedQueue.shift();
+        const type = guaranteed ?? this.pickWaveEnemy(wave);
+        this.spawnEnemy(type);
+        this.waveSpawned++;
+        this.waveSpawnTimer = wave.spawnInterval;
+      }
+    }
+
+    if (this.waveSpawned >= wave.spawnCount && this.enemies.length === 0) {
+      this.completeWave();
     }
   }
 
-  private pickEnemyType(): EnemyTypeKey {
-    const entries = Object.entries(GAME_CONFIG.ENEMIES) as [EnemyTypeKey, EnemyConfig][];
-    const totalWeight = entries.reduce((sum, [, cfg]) => sum + cfg.spawnWeight, 0);
+  /** Свита босса: не больше maxAlive живых мобов, новые появляются по таймеру. */
+  private updateBossAdds(dt: number, wave: WaveConfig): void {
+    const adds = wave.adds;
+    if (!adds || !this.enemies.some((e) => e.isBoss)) return;
+
+    const alive = this.enemies.filter((e) => !e.isBoss).length;
+    this.bossAddsTimer -= dt;
+
+    if (this.bossAddsTimer > 0 || alive >= adds.maxAlive) return;
+
+    this.spawnEnemy(this.pickWeightedEnemy(adds.weights));
+    this.bossAddsTimer = adds.spawnInterval;
+  }
+
+  private pickWaveEnemy(wave: WaveConfig): EnemyTypeKey {
+    return this.pickWeightedEnemy(wave.weights);
+  }
+
+  private pickWeightedEnemy(
+    weights: Partial<Record<EnemyTypeKey, number>> | undefined
+  ): EnemyTypeKey {
+    const entries = Object.entries(weights ?? {}) as [EnemyTypeKey, number][];
+    const totalWeight = entries.reduce((sum, [, weight]) => sum + weight, 0);
+    if (totalWeight <= 0) return 'SWARMER';
+
     let roll = Phaser.Math.Between(1, totalWeight);
-
-    for (const [key, cfg] of entries) {
-      if (roll <= cfg.spawnWeight) return key;
-      roll -= cfg.spawnWeight;
+    for (const [key, weight] of entries) {
+      if (roll <= weight) return key;
+      roll -= weight;
     }
-    return 'STALKER';
+    return 'SWARMER';
   }
 
-  private spawnRandomEnemy(): void {
-    const type = this.pickEnemyType();
+  private beginWave(index: number): void {
+    const wave = WAVES[index];
+    if (!wave) return;
+
+    this.waveIndex = index;
+    this.waveSpawned = 0;
+    this.waveSpawnTimer = 1;
+    this.waveTransitionTimer = 0;
+    this.waveActive = true;
+    this.guaranteedQueue = [...(wave.guaranteed ?? [])];
+    this.bossAddsTimer = wave.adds?.startDelay ?? 0;
+
+    const detail = wave.boss
+      ? 'Хранитель крипты вышел на охоту · не дайте факелу погаснуть'
+      : `${wave.spawnCount} теней · не дайте факелу погаснуть`;
+    showWaveNotice(this, index + 1, WAVES.length, wave.name, detail);
+
+    if (wave.boss) {
+      this.spawnBoss(wave.boss);
+      for (const escort of wave.escorts ?? []) {
+        for (let i = 0; i < escort.count; i++) {
+          this.spawnEnemy(escort.type);
+        }
+      }
+    }
+  }
+
+  private completeWave(): void {
+    this.waveActive = false;
+    this.clearEnemyProjectiles();
+    hideBossBar(this.hud);
+
+    if (this.waveIndex >= WAVES.length - 1) {
+      this.triggerVictory();
+      return;
+    }
+
+    // Короткая передышка между волнами.
+    this.hp = Math.min(GAME_CONFIG.PLAYER.MAX_HP, this.hp + 1);
+    this.mana = Math.min(GAME_CONFIG.COMBAT.MAX_MANA, this.mana + 25);
+    this.waveTransitionTimer = 2.5;
+    showFloatingText(this, this.playerX, this.playerY - 34, 'Волна пройдена', '#fbbf24');
+  }
+
+  private spawnEnemy(type: EnemyTypeKey): void {
     const cfg = GAME_CONFIG.ENEMIES[type];
     const crack = Phaser.Utils.Array.GetRandom(this.cracks);
-
     const visual = createEnemyVisual(this, type, cfg, crack.x, crack.y);
+
+    if (visual.hpBar) {
+      visual.hpBar.setData('maxWidth', visual.hpBar.width);
+    }
 
     this.enemies.push({
       type,
       config: cfg,
+      behavior: cfg.behavior,
       container: visual.container,
       bodyShape: visual.bodyShape,
       eyes: visual.eyes,
+      glow: visual.glow,
       hpBar: visual.hpBar,
       x: crack.x,
       y: crack.y,
       hp: cfg.hp,
       maxHp: cfg.hp,
       inLight: false,
+      attackTimer: cfg.attackCooldown ?? 0,
+      specialTimer: 0,
+      contactCooldown: 0,
+      state: 'CHASE',
+      stateTimer: 0,
+      chargeAngle: 0,
+      isBoss: false,
+      hasEnraged: false,
     });
   }
+
+  private spawnBoss(key: BossTypeKey): void {
+    const cfg = BOSS_CONFIG[key];
+    // Босс крупный, поэтому появляется в глубине зала, а не из разлома у стены.
+    const { WIDTH, HEIGHT } = GAME_CONFIG.WORLD;
+    const spawnX = WIDTH / 2;
+    const spawnY = HEIGHT * 0.3;
+    const visual = createBossVisual(this, key, cfg, spawnX, spawnY);
+
+    this.enemies.push({
+      type: key,
+      config: cfg,
+      behavior: 'BOSS',
+      container: visual.container,
+      bodyShape: visual.bodyShape,
+      eyes: visual.eyes,
+      glow: visual.glow,
+      x: spawnX,
+      y: spawnY,
+      hp: cfg.hp,
+      maxHp: cfg.hp,
+      inLight: false,
+      attackTimer: 2.5,
+      specialTimer: 4.5,
+      contactCooldown: 0,
+      state: 'CHASE',
+      stateTimer: 0,
+      chargeAngle: 0,
+      isBoss: true,
+      hasEnraged: false,
+    });
+
+    showFloatingText(this, spawnX, spawnY - cfg.radius - 20, cfg.name, '#fbbf24');
+  }
+
+  // ============================================================================
+  // 5. ВРАГИ И ИХ ПОВЕДЕНИЕ
+  // ============================================================================
 
   private updateEnemies(dt: number, time: number): void {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      const distToPlayer = Phaser.Math.Distance.Between(e.x, e.y, this.playerX, this.playerY);
-
-      const isInsideLight = distToPlayer <= this.currentLightRadius;
-      e.inLight = isInsideLight;
-
-      if (isInsideLight) {
-        e.bodyShape.setStrokeStyle(2.5, e.config.lightStrokeColor);
-        e.eyes.forEach((eye) => eye.setFillStyle(0xfef08a));
-      } else {
-        e.bodyShape.setStrokeStyle(2.5, e.config.strokeColor);
-        e.eyes.forEach((eye) => eye.setFillStyle(e.config.eyeColor));
-      }
-
-      const speedMultiplier = isInsideLight ? e.config.lightSlowFactor : 1.0;
-      const currentSpeed = e.config.speed * speedMultiplier;
+      const dist = Phaser.Math.Distance.Between(e.x, e.y, this.playerX, this.playerY);
       const angle = Phaser.Math.Angle.Between(e.x, e.y, this.playerX, this.playerY);
 
-      const wobble = e.type === 'SWARMER' ? Math.sin(time * 0.012 + i) * 0.35 : 0;
+      e.contactCooldown = Math.max(0, e.contactCooldown - dt);
+      this.updateEnemyVisual(e, dist, time);
 
-      e.x += Math.cos(angle + wobble) * currentSpeed * dt;
-      e.y += Math.sin(angle + wobble) * currentSpeed * dt;
-      e.container.setPosition(e.x, e.y);
-      e.container.setRotation(angle);
+      let removed = false;
 
-      if (e.hpBar) {
-        e.hpBar.setRotation(-angle);
+      if (e.behavior === 'CHASER') {
+        removed = this.updateChaserEnemy(e, dt, angle, i, time);
+      } else if (e.behavior === 'RANGED') {
+        removed = this.updateRangedEnemy(e, dt, dist, angle);
+      } else if (e.behavior === 'EXPLODER') {
+        removed = this.updateExploderEnemy(e, dt, dist, angle, time);
+      } else if (e.behavior === 'BOSS') {
+        this.updateBoss(e, dt, dist, angle, time);
       }
 
+      if (removed) {
+        e.container.destroy();
+        this.enemies.splice(i, 1);
+        if (this.gameState !== 'PLAYING') return;
+        continue;
+      }
+
+      if (this.gameState !== 'PLAYING') return;
+
+      // Попадания снарядов игрока.
       let killed = false;
       for (let j = this.projectiles.length - 1; j >= 0; j--) {
         const p = this.projectiles[j];
@@ -486,50 +781,428 @@ export class GameScene extends Phaser.Scene {
           e.hp -= GAME_CONFIG.COMBAT.PROJECTILE_DAMAGE;
           this.shotsHit++;
 
-          if (e.hpBar) {
-            e.hpBar.width = Math.max(0, (e.hp / e.maxHp) * 34);
+          if (e.isBoss) {
+            // Полоса босса обновляется каждый кадр в updateHUD().
+          } else if (e.hpBar) {
+            const maxWidth = (e.hpBar.getData('maxWidth') as number | undefined) ?? 34;
+            e.hpBar.width = Math.max(0, (e.hp / e.maxHp) * maxWidth);
           }
 
           if (e.hp <= 0) {
             killed = true;
             break;
-          } else {
-            createHitSpark(this, e.x, e.y);
           }
+
+          createHitSpark(this, e.x, e.y);
         }
       }
 
       if (killed) {
-        createDeathEffect(this, e.x, e.y, e.config.strokeColor);
-        this.spawnManaOrb(e.x, e.y, e.config.manaDrop);
-        this.score += e.config.scoreValue;
-        this.killsCount++;
-        e.container.destroy();
-        this.enemies.splice(i, 1);
-        continue;
-      }
-
-      if (distToPlayer < e.config.radius + GAME_CONFIG.PLAYER.RADIUS - 4) {
-        createDamageEffect(this, this.playerX, this.playerY);
-        e.container.destroy();
-        this.enemies.splice(i, 1);
-        this.hp -= 1;
-
-        this.cameras.main.shake(180, 0.014);
-
-        if (this.hp <= 0) {
-          this.triggerGameOver();
+        const wasBoss = e.isBoss;
+        this.killEnemy(e, i, true);
+        if (wasBoss) {
+          this.handleBossDefeated();
           return;
         }
+        continue;
       }
     }
   }
 
+  private updateEnemyVisual(e: EnemyEntity, distToPlayer: number, time: number): void {
+    const isInsideLight = distToPlayer <= this.currentLightRadius;
+    e.inLight = isInsideLight;
+
+    if (isInsideLight) {
+      e.bodyShape.setStrokeStyle(e.isBoss ? 4 : 2.5, e.config.lightStrokeColor);
+      e.eyes.forEach((eye) => eye.setFillStyle(0xfef08a));
+    } else {
+      e.bodyShape.setStrokeStyle(e.isBoss ? 4 : 2.5, e.config.strokeColor);
+      e.eyes.forEach((eye) => eye.setFillStyle(e.config.eyeColor));
+    }
+
+    if (e.hpBar) {
+      e.hpBar.setRotation(-e.container.rotation);
+    }
+
+    // Мученик пульсирует перед взрывом.
+    if (e.behavior === 'EXPLODER' && e.state === 'WINDUP') {
+      const pulse = 1.15 + Math.sin(time * 0.03) * 0.12;
+      e.container.setScale(pulse);
+      if (e.glow) e.glow.setScale(1.2 + Math.sin(time * 0.04) * 0.3);
+    }
+  }
+
+  private updateChaserEnemy(
+    e: EnemyEntity,
+    dt: number,
+    angle: number,
+    index: number,
+    time: number
+  ): boolean {
+    const speedMultiplier = e.inLight ? e.config.lightSlowFactor : 1;
+    const speed = e.config.speed * speedMultiplier;
+    const wobble = e.type === 'SWARMER' ? Math.sin(time * 0.012 + index) * 0.35 : 0;
+
+    e.x += Math.cos(angle + wobble) * speed * dt;
+    e.y += Math.sin(angle + wobble) * speed * dt;
+    this.clampEnemyPosition(e);
+    e.container.setPosition(e.x, e.y);
+    e.container.setRotation(angle);
+
+    return this.handleMeleeContact(e);
+  }
+
+  private updateRangedEnemy(
+    e: EnemyEntity,
+    dt: number,
+    dist: number,
+    angle: number
+  ): boolean {
+    if (this.handleMeleeContact(e)) return true;
+
+    const cfg = e.config;
+    const range = cfg.attackRange ?? 320;
+    const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1);
+
+    if (dist > range * 0.9) {
+      e.x += Math.cos(angle) * speed * dt;
+      e.y += Math.sin(angle) * speed * dt;
+    } else if (dist < range * 0.55) {
+      e.x -= Math.cos(angle) * speed * dt;
+      e.y -= Math.sin(angle) * speed * dt;
+    }
+
+    this.clampEnemyPosition(e);
+    e.container.setPosition(e.x, e.y);
+    e.container.setRotation(angle);
+
+    // В свету враг стреляет реже: таймер идёт медленнее.
+    e.attackTimer -= dt * (e.inLight ? 0.7 : 1);
+
+    if (e.attackTimer <= 0 && dist < range * 1.15) {
+      this.fireEnemyProjectile(e, angle);
+      e.attackTimer = cfg.attackCooldown ?? 2.2;
+    }
+
+    return false;
+  }
+
+  private updateExploderEnemy(
+    e: EnemyEntity,
+    dt: number,
+    dist: number,
+    angle: number,
+    time: number
+  ): boolean {
+    const cfg = e.config;
+
+    if (e.state === 'CHASE') {
+      const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1);
+      e.x += Math.cos(angle) * speed * dt;
+      e.y += Math.sin(angle) * speed * dt;
+      this.clampEnemyPosition(e);
+      e.container.setPosition(e.x, e.y);
+      e.container.setRotation(angle);
+
+      if (dist < 95) {
+        e.state = 'WINDUP';
+        e.stateTimer = (cfg.explosionWindup ?? 0.85) * (e.inLight ? 1.4 : 1);
+        e.container.setScale(1.15);
+      }
+      return false;
+    }
+
+    if (e.state === 'WINDUP') {
+      e.stateTimer -= dt;
+      const pulse = 1.15 + Math.sin(time * 0.03) * 0.12;
+      e.container.setScale(pulse);
+
+      if (e.stateTimer <= 0) {
+        const radius = cfg.explosionRadius ?? 120;
+        createExplosionEffect(this, e.x, e.y, radius);
+        this.cameras.main.shake(220, 0.012);
+        if (dist < radius) {
+          this.damagePlayer(1);
+        }
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private updateBoss(
+    e: EnemyEntity,
+    dt: number,
+    dist: number,
+    angle: number,
+    time: number
+  ): void {
+    const cfg = e.config as BossConfig;
+
+    // Ярость на половине HP: ускорение и два сталкера.
+    if (!e.hasEnraged && e.hp <= e.maxHp * cfg.enrageThreshold) {
+      e.hasEnraged = true;
+      showFloatingText(this, e.x, e.y - cfg.radius - 18, 'ЯРОСТЬ ПЛАМЕНИ', '#ef4444');
+      this.cameras.main.shake(260, 0.01);
+      for (let i = 0; i < 2; i++) {
+        this.spawnEnemy('STALKER');
+      }
+    }
+
+    if (e.state === 'CHASE') {
+      const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1) * (e.hasEnraged ? 1.2 : 1);
+      e.x += Math.cos(angle) * speed * dt;
+      e.y += Math.sin(angle) * speed * dt;
+      this.clampEnemyPosition(e);
+      e.container.setPosition(e.x, e.y);
+      e.container.setRotation(angle);
+
+      e.attackTimer -= dt;
+      e.specialTimer -= dt;
+
+      // Гашение факела.
+      if (e.specialTimer <= 0) {
+        e.specialTimer = cfg.drainCooldown * (e.hasEnraged ? 0.8 : 1);
+        this.torchDrainTimer = cfg.drainDuration;
+        this.applyCurrentPhase();
+        showFloatingText(this, this.playerX, this.playerY - 36, 'ФАКЕЛ ГАСНЕТ', '#ef4444');
+        this.cameras.main.shake(200, 0.008);
+      }
+
+      // Подготовка рывка.
+      if (e.attackTimer <= 0 && dist < 520) {
+        e.state = 'WINDUP';
+        e.stateTimer = 0.8;
+        e.chargeAngle = angle;
+        e.attackTimer = cfg.chargeCooldown * (e.hasEnraged ? 0.8 : 1);
+        e.container.setScale(1.12);
+      }
+    } else if (e.state === 'WINDUP') {
+      e.stateTimer -= dt;
+      e.container.setRotation(angle);
+      if (e.glow) e.glow.setScale(1.1 + Math.sin(time * 0.04) * 0.25);
+
+      if (e.stateTimer <= 0) {
+        e.state = 'ATTACK';
+        e.stateTimer = 0.55;
+      }
+    } else if (e.state === 'ATTACK') {
+      const chargeSpeed = cfg.chargeSpeed * (e.hasEnraged ? 1.15 : 1);
+      e.x += Math.cos(e.chargeAngle) * chargeSpeed * dt;
+      e.y += Math.sin(e.chargeAngle) * chargeSpeed * dt;
+      this.clampEnemyPosition(e);
+      e.container.setPosition(e.x, e.y);
+      e.container.setRotation(e.chargeAngle);
+      e.stateTimer -= dt;
+
+      if (e.stateTimer <= 0) {
+        e.state = 'RECOVER';
+        e.stateTimer = 0.8;
+        e.container.setScale(1);
+      }
+    } else {
+      e.stateTimer -= dt;
+      if (e.stateTimer <= 0) {
+        e.state = 'CHASE';
+      }
+    }
+
+    const contactDist = Phaser.Math.Distance.Between(e.x, e.y, this.playerX, this.playerY);
+    if (
+      contactDist < cfg.radius + GAME_CONFIG.PLAYER.RADIUS &&
+      this.invulnTimer <= 0 &&
+      e.contactCooldown <= 0
+    ) {
+      this.damagePlayer(e.state === 'ATTACK' ? cfg.chargeDamage : cfg.contactDamage);
+      e.contactCooldown = GAME_CONFIG.COMBAT.MELEE_CONTACT_COOLDOWN;
+    }
+  }
+
+  /**
+   * Касание обычного врага. Пока действует неуязвимость, не происходит
+   * ничего: ни урона, ни отскока, ни смерти врага. После урона у врага
+   * появляется короткая пауза, чтобы он не бил каждый кадр.
+   */
+  private handleMeleeContact(e: EnemyEntity): boolean {
+    if (this.invulnTimer > 0 || e.contactCooldown > 0) return false;
+
+    const dist = Phaser.Math.Distance.Between(e.x, e.y, this.playerX, this.playerY);
+    if (dist >= e.config.radius + GAME_CONFIG.PLAYER.RADIUS - 4) return false;
+
+    this.damagePlayer(1);
+    e.contactCooldown = GAME_CONFIG.COMBAT.MELEE_CONTACT_COOLDOWN;
+    return false;
+  }
+
+  private clampEnemyPosition(e: EnemyEntity): void {
+    const { WIDTH, HEIGHT, PADDING } = GAME_CONFIG.WORLD;
+    e.x = Phaser.Math.Clamp(e.x, PADDING, WIDTH - PADDING);
+    e.y = Phaser.Math.Clamp(e.y, PADDING, HEIGHT - PADDING);
+  }
+
+  private fireEnemyProjectile(e: EnemyEntity, angle: number): void {
+    const speed = e.config.projectileSpeed ?? 230;
+    const spawnX = e.x + Math.cos(angle) * (e.config.radius + 10);
+    const spawnY = e.y + Math.sin(angle) * (e.config.radius + 10);
+
+    const container = this.add.container(spawnX, spawnY).setDepth(24);
+    const glow = this.add.circle(0, 0, 10, 0x7f1d1d, 0.5);
+    const core = this.add.circle(0, 0, 5, 0xf87171).setStrokeStyle(2, 0x450a0a);
+    container.add([glow, core]);
+
+    this.enemyProjectiles.push({
+      container,
+      x: spawnX,
+      y: spawnY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 4,
+      damage: 1,
+    });
+  }
+
+  private updateEnemyProjectiles(dt: number): void {
+    const { WIDTH, HEIGHT } = GAME_CONFIG.WORLD;
+
+    for (let i = this.enemyProjectiles.length - 1; i >= 0; i--) {
+      const p = this.enemyProjectiles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life -= dt;
+      p.container.setPosition(p.x, p.y);
+
+      const hitPlayer =
+        Phaser.Math.Distance.Between(p.x, p.y, this.playerX, this.playerY) <
+        GAME_CONFIG.PLAYER.RADIUS + 7;
+
+      if (hitPlayer) {
+        this.damagePlayer(p.damage);
+        p.container.destroy();
+        this.enemyProjectiles.splice(i, 1);
+        continue;
+      }
+
+      if (p.life <= 0 || p.x < 18 || p.x > WIDTH - 18 || p.y < 18 || p.y > HEIGHT - 18) {
+        p.container.destroy();
+        this.enemyProjectiles.splice(i, 1);
+      }
+    }
+  }
+
+  private killEnemy(e: EnemyEntity, index: number, rewards: boolean): void {
+    createDeathEffect(this, e.x, e.y, e.config.strokeColor);
+
+    if (rewards) {
+      this.spawnManaOrb(e.x, e.y, e.config.manaDrop);
+      this.score += e.config.scoreValue;
+      this.killsCount++;
+      this.gainXp(e.config.xp);
+      if (e.isBoss) {
+        this.bossesKilled++;
+      }
+    }
+
+    e.container.destroy();
+    this.enemies.splice(index, 1);
+  }
+
+  private handleBossDefeated(): void {
+    hideBossBar(this.hud);
+    this.clearEnemyProjectiles();
+    this.waveActive = false;
+
+    // Оставшиеся мелкие враги рассыпаются вместе с хозяином.
+    for (const e of this.enemies) {
+      createDeathEffect(this, e.x, e.y, e.config.strokeColor);
+      e.container.destroy();
+    }
+    this.enemies = [];
+
+    this.triggerVictory();
+  }
+
+  private damagePlayer(amount: number): void {
+    if (this.gameState !== 'PLAYING' || this.invulnTimer > 0) return;
+
+    this.hp = Math.max(0, this.hp - amount);
+    this.invulnTimer = GAME_CONFIG.PLAYER.INVULN_DURATION;
+
+    createDamageEffect(this, this.playerX, this.playerY);
+    this.cameras.main.shake(180, 0.014);
+
+    if (this.hp <= 0) {
+      this.triggerGameOver();
+    }
+  }
+
+  private updateInvulnerability(time: number, dt: number): void {
+    if (this.invulnTimer <= 0) {
+      this.player.setAlpha(1);
+      this.invulnRing.setVisible(false);
+      return;
+    }
+
+    this.invulnTimer = Math.max(0, this.invulnTimer - dt);
+
+    const blink = Math.floor(time / 80) % 2 === 0;
+    this.player.setAlpha(blink ? 0.35 : 1);
+
+    this.invulnRing
+      .setVisible(true)
+      .setPosition(this.playerX, this.playerY)
+      .setAlpha(0.55 + Math.sin(time * 0.02) * 0.35)
+      .setScale(0.94 + Math.sin(time * 0.015) * 0.08);
+  }
+
   // ============================================================================
-  // 5. HUD И ЭКРАНЫ МЕНЮ
+  // 6. ОПЫТ И УРОВЕНЬ
   // ============================================================================
 
-  private updateHUD(): void {
+  private gainXp(amount: number): void {
+    this.xp += amount;
+
+    while (this.xp >= this.xpToNext) {
+      this.xp -= this.xpToNext;
+      this.level++;
+      this.xpToNext = xpToNextLevel(this.level);
+      this.onLevelUp();
+    }
+  }
+
+  private onLevelUp(): void {
+    showFloatingText(this, this.playerX, this.playerY - 42, `УРОВЕНЬ ${this.level}`, '#fbbf24');
+    this.cameras.main.flash(160, 251, 191, 36);
+
+    this.hud.levelText.setScale(1.25);
+    this.tweens.add({
+      targets: this.hud.levelText,
+      scale: 1,
+      duration: 260,
+    });
+
+    // Здесь позже появится выбор улучшения при повышении уровня.
+  }
+
+  // ============================================================================
+  // 7. HUD И ЭКРАНЫ
+  // ============================================================================
+
+  private updateHUD(dt: number): void {
+    const wave = WAVES[this.waveIndex];
+    const phase = getPhaseProgress(this.score);
+    const bossEntity = this.enemies.find((e) => e.isBoss);
+
+    // Сколько врагов ещё осталось побить в текущей волне:
+    // непоявившиеся + уже на поле.
+    const pendingSpawns = wave && !wave.boss
+      ? Math.max(0, wave.spawnCount - this.waveSpawned)
+      : 0;
+    const addsAlive = wave?.boss
+      ? this.enemies.filter((e) => !e.isBoss).length
+      : 0;
+
     updateHud(this.hud, {
       hp: this.hp,
       mana: this.mana,
@@ -537,6 +1210,26 @@ export class GameScene extends Phaser.Scene {
       killsCount: this.killsCount,
       survivalTime: this.survivalTime,
       slowedEnemies: this.enemies.filter((e) => e.inLight).length,
+      level: this.level,
+      xp: this.xp,
+      xpToNext: this.xpToNext,
+      wave: this.waveIndex + 1,
+      wavesTotal: WAVES.length,
+      waveName: wave?.name ?? '',
+      enemiesLeft: pendingSpawns + this.enemies.length,
+      addsLeft: wave?.boss ? addsAlive : null,
+      phase: phase.phase,
+      phaseProgress: phase.progress,
+      phasePointsToNext: phase.pointsToNext,
+      phaseNext: phase.next,
+      boss: bossEntity
+        ? {
+            name: bossEntity.config.name,
+            hpRatio: bossEntity.hp / bossEntity.maxHp,
+            enraged: bossEntity.hasEnraged,
+          }
+        : null,
+      dt,
     });
   }
 
@@ -545,9 +1238,25 @@ export class GameScene extends Phaser.Scene {
     this.enemies.forEach((e) => e.container.destroy());
     this.projectiles.forEach((p) => p.container.destroy());
     this.manaOrbs.forEach((m) => m.container.destroy());
+    this.clearEnemyProjectiles();
+
     this.enemies = [];
     this.projectiles = [];
     this.manaOrbs = [];
+    this.waveActive = false;
+    this.waveTransitionTimer = 0;
+    this.guaranteedQueue = [];
+    this.bossAddsTimer = 0;
+    this.torchDrainTimer = 0;
+
+    if (this.hud) {
+      hideBossBar(this.hud);
+    }
+  }
+
+  private clearEnemyProjectiles(): void {
+    this.enemyProjectiles.forEach((p) => p.container.destroy());
+    this.enemyProjectiles = [];
   }
 
   /** Возвращает игрока и камеру в исходное состояние партии. */
@@ -560,15 +1269,24 @@ export class GameScene extends Phaser.Scene {
 
   private showStartScreen(): void {
     this.gameState = 'START';
+    clearAllNotices(this);
     this.hud.container.setVisible(false);
+    hideBossBar(this.hud);
     this.cooldownArc.clear();
     this.uiOverlay.removeAll(true);
 
     // Очищаем поле и ставим рыцаря в центр для красивого фона меню
     this.clearField();
     this.resetPlayerPosition();
+    this.player.setAlpha(1);
+    this.invulnRing.setVisible(false);
 
-    drawStartScreen(this, this.uiOverlay, () => this.startGame());
+    drawStartScreen(
+      this,
+      this.uiOverlay,
+      () => this.startGame(),
+      this.getSettingsController()
+    );
   }
 
   private startGame(): void {
@@ -577,8 +1295,13 @@ export class GameScene extends Phaser.Scene {
 
     this.hp = GAME_CONFIG.PLAYER.MAX_HP;
     this.mana = GAME_CONFIG.COMBAT.START_MANA;
+    this.invulnTimer = 0;
+    this.player.setAlpha(1);
+    this.invulnRing.setVisible(false);
+
     // Новая партия всегда начинается со светлой фазы
     this.currentPhase = getPhase(0);
+    this.torchDrainTimer = 0;
     this.applyCurrentPhase();
 
     this.score = 0;
@@ -588,41 +1311,108 @@ export class GameScene extends Phaser.Scene {
     this.manaCollected = 0;
     this.survivalTime = 0;
     this.fireCooldown = 0;
-    this.spawnTimer = 0;
+    this.bossesKilled = 0;
+
+    this.level = 1;
+    this.xp = 0;
+    this.xpToNext = xpToNextLevel(1);
+
+    this.waveIndex = 0;
+    this.waveSpawned = 0;
+    this.waveSpawnTimer = 0;
+    this.waveTransitionTimer = 0;
+    this.waveActive = false;
+    this.guaranteedQueue = [];
+    this.bossAddsTimer = 0;
 
     this.uiOverlay.removeAll(true);
     this.hud.container.setVisible(true);
-    this.updateHUD();
+    hideBossBar(this.hud);
+    this.updateHUD(0);
     this.gameState = 'PLAYING';
+
+    this.beginWave(0);
+  }
+
+  private buildStats(victory = false): {
+    score: number;
+    killsCount: number;
+    survivalTime: number;
+    manaCollected: number;
+    accuracy: number;
+    wave: number;
+    wavesTotal: number;
+    level: number;
+    bossesKilled: number;
+    hp: number;
+    maxHp: number;
+    victory: boolean;
+  } {
+    const accuracy = this.shotsFired > 0
+      ? Math.round((this.shotsHit / this.shotsFired) * 100)
+      : 0;
+
+    return {
+      score: this.score,
+      killsCount: this.killsCount,
+      survivalTime: this.survivalTime,
+      manaCollected: this.manaCollected,
+      accuracy,
+      wave: this.waveIndex + 1,
+      wavesTotal: WAVES.length,
+      level: this.level,
+      bossesKilled: this.bossesKilled,
+      hp: this.hp,
+      maxHp: GAME_CONFIG.PLAYER.MAX_HP,
+      victory,
+    };
   }
 
   private triggerGameOver(): void {
     this.gameState = 'GAMEOVER';
+    clearAllNotices(this);
     this.hud.container.setVisible(false);
+    hideBossBar(this.hud);
     this.cooldownArc.clear();
     this.uiOverlay.removeAll(true);
-
-    const accuracy = this.shotsFired > 0 ? Math.round((this.shotsHit / this.shotsFired) * 100) : 0;
+    this.player.setAlpha(1);
+    this.invulnRing.setVisible(false);
+    this.clearEnemyProjectiles();
 
     drawGameOverScreen(
       this,
       this.uiOverlay,
-      {
-        score: this.score,
-        killsCount: this.killsCount,
-        survivalTime: this.survivalTime,
-        manaCollected: this.manaCollected,
-        accuracy,
-      },
+      this.buildStats(false),
+      () => this.startGame(),
+      () => this.showStartScreen()
+    );
+  }
+
+  private triggerVictory(): void {
+    this.gameState = 'VICTORY';
+    clearAllNotices(this);
+    this.hud.container.setVisible(false);
+    hideBossBar(this.hud);
+    this.cooldownArc.clear();
+    this.uiOverlay.removeAll(true);
+    this.player.setAlpha(1);
+    this.invulnRing.setVisible(false);
+    this.clearEnemyProjectiles();
+
+    drawVictoryScreen(
+      this,
+      this.uiOverlay,
+      this.buildStats(true),
+      () => this.startGame(),
       () => this.showStartScreen()
     );
   }
 
   // ============================================================================
-  // 6. ПАУЗА ПО ESC
+  // 8. ПАУЗА ПО ESC
   // ============================================================================
 
-  /** ESC: PLAYING → пауза, PAUSED → продолжить, в меню и на экране смерти — игнор. */
+  /** ESC: PLAYING → пауза, PAUSED → продолжить, в меню и на результатах — игнор. */
   private togglePause(): void {
     if (this.gameState === 'PLAYING') {
       this.pauseGame();
@@ -634,8 +1424,17 @@ export class GameScene extends Phaser.Scene {
   /** Замораживает партию и рисует экран паузы поверх HUD. */
   private pauseGame(): void {
     this.gameState = 'PAUSED';
+    clearAllNotices(this);
     this.uiOverlay.removeAll(true);
-    drawPauseScreen(this, this.uiOverlay, () => this.resumeGame(), () => this.startGame());
+    drawPauseScreen(
+      this,
+      this.uiOverlay,
+      this.buildStats(false),
+      () => this.resumeGame(),
+      () => this.startGame(),
+      () => this.showStartScreen(),
+      this.getSettingsController()
+    );
   }
 
   /** Разморозка: статистика и таймеры не сбрасываются, игра идёт дальше. */
@@ -646,7 +1445,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ============================================================================
-  // 7. ФАЗЫ ФАКЕЛА
+  // 9. ФАЗЫ ФАКЕЛА
   // ============================================================================
 
   /** Условие смены фазы живёт в core/phases.ts (функция getPhase). */
@@ -656,13 +1455,16 @@ export class GameScene extends Phaser.Scene {
 
     this.currentPhase = next;
     this.applyCurrentPhase();
-    showPhaseNotice(this, PHASES[next].notice);
+    showPhaseNotice(this, this.currentPhase, PHASES[next].notice);
   }
 
   /** Применяет свойства текущей фазы: радиус света и свечение вокруг игрока. */
   private applyCurrentPhase(): void {
-    this.currentLightRadius = PHASES[this.currentPhase].lightRadius;
-    this.rebuildLightBrush(this.currentLightRadius);
-    this.ambientGlow.setRadius(this.currentLightRadius);
+    const baseRadius = PHASES[this.currentPhase].lightRadius;
+    const radius = this.torchDrainTimer > 0
+      ? Math.min(baseRadius, BOSS_CONFIG.FLAME_EATER.drainRadius)
+      : baseRadius;
+
+    this.setLightRadius(radius);
   }
 }

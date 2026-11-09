@@ -14,9 +14,9 @@ export type PhaseKey = 'LIGHT' | 'DARK';
 /** Пороги очков, при которых факел переключается между фазами. */
 export const PHASE_SCORING = {
   /** Сколько очков набрать при свете, чтобы факел погас. */
-  LIGHT_SCORE: 20,
+  LIGHT_SCORE: 25,
   /** Сколько очков набрать во тьме, чтобы факел загорелся снова. */
-  DARK_SCORE: 10,
+  DARK_SCORE: 15,
 } as const;
 
 /** Уведомление, показываемое на экране при входе в фазу. */
@@ -37,24 +37,74 @@ export interface PhaseDefinition {
 
 export const PHASES: Record<PhaseKey, PhaseDefinition> = {
   LIGHT: {
-    lightRadius: 210,
+    lightRadius: 260,
     playerSpeedFactor: 1,
     notice: {
-      title: 'ФАКЕЛ ЗАГОРЕЛСЯ',
-      body: 'Свет вернулся — враги снова замедлены',
+      title: 'СВЕТ ВОЗВРАЩАЕТСЯ',
+      body: 'Враги снова замедлены в круге света · Факел горит ярко',
       color: '#fbbf24',
     },
   },
   DARK: {
-    lightRadius: 70,
-    playerSpeedFactor: 0.8,
+    lightRadius: 90,
+    playerSpeedFactor: 0.85,
     notice: {
-      title: 'ФАКЕЛ ПОГАС',
-      body: `Набери ещё ${PHASE_SCORING.DARK_SCORE} очков, чтобы вернуть свет`,
+      title: 'ФАКЕЛ ГАСНЕТ',
+      body: `Свет сузился, движение медленнее · Набери ${PHASE_SCORING.DARK_SCORE} очков, чтобы вернуть пламя`,
       color: '#ef4444',
     },
   },
 };
+
+export interface PhaseProgress {
+  phase: PhaseKey;
+  /** Фаза, которая наступит следующей. */
+  next: PhaseKey;
+  /** Сколько очков осталось до переключения. */
+  pointsToNext: number;
+  /** Длина текущей фазы в очках. */
+  phaseLength: number;
+  /** Прогресс внутри фазы: 0 — только началась, 1 — вот-вот сменится. */
+  progress: number;
+}
+
+/** То же условие, что и в getPhase, но с данными для шкалы HUD. */
+export function getPhaseProgress(totalScore: number): PhaseProgress {
+  const { LIGHT_SCORE, DARK_SCORE } = PHASE_SCORING;
+
+  if (totalScore < LIGHT_SCORE) {
+    return {
+      phase: 'LIGHT',
+      next: 'DARK',
+      pointsToNext: LIGHT_SCORE - totalScore,
+      phaseLength: LIGHT_SCORE,
+      progress: totalScore / LIGHT_SCORE,
+    };
+  }
+
+  const inDark = totalScore - LIGHT_SCORE;
+  const cycle = LIGHT_SCORE + DARK_SCORE;
+  const position = inDark % cycle;
+
+  if (position < DARK_SCORE) {
+    return {
+      phase: 'DARK',
+      next: 'LIGHT',
+      pointsToNext: DARK_SCORE - position,
+      phaseLength: DARK_SCORE,
+      progress: position / DARK_SCORE,
+    };
+  }
+
+  const lightElapsed = position - DARK_SCORE;
+  return {
+    phase: 'LIGHT',
+    next: 'DARK',
+    pointsToNext: LIGHT_SCORE - lightElapsed,
+    phaseLength: LIGHT_SCORE,
+    progress: lightElapsed / LIGHT_SCORE,
+  };
+}
 
 /**
  * Условие активации фазы: чистая функция от общего счёта.

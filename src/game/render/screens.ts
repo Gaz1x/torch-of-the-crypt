@@ -1,5 +1,17 @@
 import Phaser from 'phaser';
+import {
+  calculateRank,
+  type Profile,
+  type RankResult,
+} from '../core/profile';
 import { DEFAULT_SETTINGS, type GameSettings } from '../core/settings';
+import {
+  getUpgradeCost,
+  UPGRADE_ORDER,
+  UPGRADES,
+  type UpgradeKey,
+} from '../core/upgrades';
+import { drawHubBackground } from './hubBackground';
 import {
   createButton,
   createDivider,
@@ -14,7 +26,7 @@ import {
 } from './uiKit';
 
 // ============================================================================
-// ЭКРАНЫ МЕНЮ (стартовый экран, памятка, пауза, победа и поражение)
+// ЭКРАНЫ (лагерь, улучшения, памятка, пауза, победа и поражение)
 // Вёрстка рассчитана сразу на 1280×720. Вся статистика и очистка поля
 // остаются в GameScene — здесь только отрисовка.
 // ============================================================================
@@ -32,19 +44,11 @@ export interface GameOverStats {
   bossesKilled: number;
   hp: number;
   maxHp: number;
+  /** Сколько Эха принёс этот спуск. */
+  echoGained: number;
+  /** Сколько Эха всего накоплено в профиле. */
+  echoTotal: number;
   victory: boolean;
-}
-
-type RankLetter = 'S' | 'A' | 'B';
-
-const RANK_THRESHOLDS = {
-  S: 80,
-  A: 55,
-} as const;
-
-interface RankResult {
-  letter: RankLetter;
-  title: string;
 }
 
 /** Настройки живут в GameScene, экраны только показывают их и меняют. */
@@ -53,21 +57,10 @@ export interface SettingsController {
   update: (next: GameSettings) => void;
 }
 
-function calculateRank(stats: GameOverStats): RankResult {
-  const wavesPart =
-    ((stats.wave - 1 + (stats.victory ? 1 : 0)) / Math.max(1, stats.wavesTotal)) * 45;
-  const accuracyPart = (stats.accuracy / 100) * 15;
-  const hpPart = (stats.maxHp > 0 ? stats.hp / stats.maxHp : 0) * 20;
-  const scorePart = (Math.min(stats.score, 150) / 150) * 20;
-  const rating = wavesPart + accuracyPart + hpPart + scorePart;
-
-  if (rating >= RANK_THRESHOLDS.S) {
-    return { letter: 'S', title: 'ЛЕГЕНДА ПЛАМЕНИ' };
-  }
-  if (rating >= RANK_THRESHOLDS.A) {
-    return { letter: 'A', title: 'СТРАЖ КРИПТЫ' };
-  }
-  return { letter: 'B', title: 'ВЫЖИВШИЙ' };
+/** Профиль и покупки тоже живут в GameScene, хаб только вызывает их. */
+export interface ProfileController {
+  getProfile: () => Profile;
+  buyUpgrade: (key: UpgradeKey) => { ok: boolean; message: string };
 }
 
 /** Затемнение, виньетка и угли — общий фон всех меню. */
@@ -128,18 +121,18 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   ).setInteractive();
   modal.add(backdrop);
 
-  const panel = createPanel(scene, -370, -250, 740, 500, UI_COLORS.mana);
+  const panel = createPanel(scene, -400, -260, 800, 520, UI_COLORS.mana);
   modal.add(panel);
 
-  const title = scene.add.text(0, -212, 'ПАМЯТКА СТРАЖА', {
+  const title = scene.add.text(0, -220, 'ПАМЯТКА СТРАЖА', {
     fontFamily: UI_FONT.display,
-    fontSize: '27px',
+    fontSize: '28px',
     fontStyle: 'bold',
     color: '#dbeafe',
     letterSpacing: 1,
   }).setOrigin(0.5);
 
-  const divider = createDivider(scene, 0, -178, 460, UI_COLORS.mana);
+  const divider = createDivider(scene, 0, -182, 520, UI_COLORS.mana);
 
   const headers = (x: number, y: number, text: string): Phaser.GameObjects.Text =>
     scene.add.text(x, y, text, {
@@ -162,50 +155,47 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const leftX = -340;
   const rightX = 20;
 
-  const leftControlsHeader = headers(leftX, -150, 'УПРАВЛЕНИЕ');
+  const leftControlsHeader = headers(leftX, -146, 'УПРАВЛЕНИЕ');
   const leftControlsBody = body(
     leftX,
-    -124,
+    -118,
     'WASD или стрелки — движение\n' +
       'Курсор мыши — направление взгляда\n' +
       'ЛКМ или Пробел — выстрел (15 маны)\n' +
       'ESC — пауза'
   );
 
-  const leftLightHeader = headers(leftX, -30, 'СВЕТ И ТЬМА');
-  const leftLightBody = body(
-    leftX,
-    -4,
+  const rightCombatHeader = headers(rightX, -146, 'БОЙ');
+  const rightCombatBody = body(
+    rightX,
+    -118,
     'В круге света враги сильно замедляются\n' +
       'Во тьме свет сужается, рыцарь медленнее\n' +
-      'Фазы сменяются по набранным очкам'
+      'Фазы сменяются по набранным очкам\n' +
+      'После урона — секунда неуязвимости'
   );
 
-  const rightWavesHeader = headers(rightX, -150, 'ВОЛНЫ');
-  const rightWavesBody = body(
-    rightX,
-    -124,
-    'Пять волн, последняя — босс\n' +
+  const midDivider = createDivider(scene, 0, -18, 620, UI_COLORS.mana);
+
+  const leftRunHeader = headers(leftX, 20, 'СПУСК');
+  const leftRunBody = body(
+    leftX,
+    46,
+    'Пять волн, в конце — босс\n' +
+      'У каждого босса свои приёмы\n' +
       'Между волнами: +1 HP и +25 маны'
   );
 
-  const rightBossHeader = headers(rightX, -62, 'ПОЖИРАТЕЛЬ ПЛАМЕНИ');
-  const rightBossBody = body(
+  const rightEchoHeader = headers(rightX, 20, 'ЭХО И ЛАГЕРЬ');
+  const rightEchoBody = body(
     rightX,
-    -36,
-    'Гасит факел и бросается в рывок\n' +
-      'На половине HP звереет и зовёт свиту'
+    46,
+    'Эхо за спуск: очки / 2 + 20 за босса\n' +
+      'Победа — полная награда, смерть — половина\n' +
+      'Эхо тратится на улучшения в лагере'
   );
 
-  const rightTipHeader = headers(rightX, 22, 'СОВЕТ');
-  const rightTipBody = body(
-    rightX,
-    48,
-    'Следите за маной и не стойте в толпе.\n' +
-      'После урона есть секунда неуязвимости.'
-  );
-
-  const closeButton = createButton(scene, 0, 202, 220, 46, 'ЗАКРЫТЬ', {
+  const closeButton = createButton(scene, 0, 200, 220, 46, 'ЗАКРЫТЬ', {
     variant: 'secondary',
     onClick: () => close(),
     fontSize: 14,
@@ -216,14 +206,13 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
     divider,
     leftControlsHeader,
     leftControlsBody,
-    leftLightHeader,
-    leftLightBody,
-    rightWavesHeader,
-    rightWavesBody,
-    rightBossHeader,
-    rightBossBody,
-    rightTipHeader,
-    rightTipBody,
+    rightCombatHeader,
+    rightCombatBody,
+    midDivider,
+    leftRunHeader,
+    leftRunBody,
+    rightEchoHeader,
+    rightEchoBody,
     closeButton.container,
   ]);
 
@@ -272,7 +261,7 @@ function createSettingsModal(
     .setInteractive();
   modal.add(backdrop);
 
-  const panel = createPanel(scene, 330, 145, 620, 430, UI_COLORS.mana);
+  const panel = createPanel(scene, 330, 145, 620, 455, UI_COLORS.mana);
   modal.add(panel);
 
   const title = scene.add.text(width / 2, 192, 'НАСТРОЙКИ', {
@@ -305,10 +294,10 @@ function createSettingsModal(
       color: valueColor,
     }).setOrigin(1, 0.5);
 
-  const musicLabel = makeLabel(268, 'МУЗЫКА');
-  const musicValue = makeValue(268);
-  const sfxLabel = makeLabel(348, 'ЗВУКИ');
-  const sfxValue = makeValue(348);
+  const musicLabel = makeLabel(288, 'МУЗЫКА');
+  const musicValue = makeValue(288);
+  const sfxLabel = makeLabel(376, 'ЗВУКИ');
+  const sfxValue = makeValue(376);
 
   let current: GameSettings = { ...controller.settings };
 
@@ -323,19 +312,25 @@ function createSettingsModal(
     controller.update(current);
   };
 
-  const musicSlider = createSlider(scene, width / 2, 302, 360, {
+  const musicSlider = createSlider(scene, width / 2, 322, 360, {
     value: current.musicVolume,
     accent: UI_COLORS.ember,
     onChange: (value) => apply({ ...current, musicVolume: value }),
   });
 
-  const sfxSlider = createSlider(scene, width / 2, 382, 360, {
+  const sfxSlider = createSlider(scene, width / 2, 410, 360, {
     value: current.sfxVolume,
     accent: UI_COLORS.mana,
     onChange: (value) => apply({ ...current, sfxVolume: value }),
   });
 
-  const muteButton = createButton(scene, width / 2, 440, 280, 44, '', {
+  const sfxHint = scene.add.text(width / 2, 434, 'эффекты появятся позже', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    color: '#64748b',
+  }).setOrigin(0.5);
+
+  const muteButton = createButton(scene, width / 2, 486, 280, 44, '', {
     variant: 'secondary',
     onClick: () => {
       current = { ...current, muted: !current.muted };
@@ -350,7 +345,7 @@ function createSettingsModal(
     muteButton.label.setColor(current.muted ? '#fca5a5' : '#e2e8f0');
   }
 
-  const resetButton = createButton(scene, width / 2 - 130, 505, 220, 44, 'СБРОСИТЬ', {
+  const resetButton = createButton(scene, width / 2 - 130, 546, 220, 44, 'СБРОСИТЬ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -365,7 +360,7 @@ function createSettingsModal(
     fontSize: 12,
   });
 
-  const closeButton = createButton(scene, width / 2 + 130, 505, 220, 44, 'ЗАКРЫТЬ', {
+  const closeButton = createButton(scene, width / 2 + 130, 546, 220, 44, 'ЗАКРЫТЬ', {
     variant: 'secondary',
     onClick: () => close(),
     fontSize: 13,
@@ -380,6 +375,7 @@ function createSettingsModal(
     sfxValue,
     musicSlider.container,
     sfxSlider.container,
+    sfxHint,
     muteButton.container,
     resetButton.container,
     closeButton.container,
@@ -412,121 +408,389 @@ function createSettingsModal(
   return { open };
 }
 
+// ============================================================================
+// УЛУЧШЕНИЯ
+// ============================================================================
+
+interface UpgradesModal {
+  open: () => void;
+}
+
+interface UpgradeCardRef {
+  key: UpgradeKey;
+  levelText: Phaser.GameObjects.Text;
+  buyButton: ReturnType<typeof createButton>;
+}
+
+function createUpgradesModal(
+  scene: Phaser.Scene,
+  screen: Phaser.GameObjects.Container,
+  controller: ProfileController,
+  onProfileChanged: () => void
+): UpgradesModal {
+  const { width, height } = scene.scale;
+  const modal = scene.add.container(0, 0).setVisible(false).setAlpha(0);
+
+  const backdrop = scene.add
+    .rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.72)
+    .setInteractive();
+  modal.add(backdrop);
+
+  const panel = createPanel(scene, 160, 48, 960, 624, UI_COLORS.ember, { glow: true });
+  modal.add(panel);
+
+  const title = scene.add.text(640, 94, 'УЛУЧШЕНИЯ', {
+    fontFamily: UI_FONT.display,
+    fontSize: '32px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const divider = createDivider(scene, 640, 128, 520, UI_COLORS.ember);
+
+  const echoText = scene.add.text(1108, 94, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '14px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 1,
+  }).setOrigin(1, 0.5);
+
+  const statusText = scene.add.text(640, 578, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '12px',
+    fontStyle: 'bold',
+    color: '#94a3b8',
+  }).setOrigin(0.5);
+
+  const cards: UpgradeCardRef[] = UPGRADE_ORDER.map((key, index) => {
+    const definition = UPGRADES[key];
+    const y = 158 + index * 136;
+    const iconKind = key === 'VITALITY' ? 'banner' : key === 'MANA_RESERVE' ? 'crystal' : 'flame';
+
+    const cardContainer = scene.add.container(0, 0);
+    const cardPanel = createPanel(scene, 220, y, 840, 120, 0x4b5d77);
+    const icon = createIcon(scene, 268, y + 60, iconKind, 32, UI_COLORS.emberBright);
+
+    const name = scene.add.text(300, y + 14, definition.name, {
+      fontFamily: UI_FONT.display,
+      fontSize: '18px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      letterSpacing: 1,
+    });
+
+    const description = scene.add.text(300, y + 42, definition.description, {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      color: '#c3cedd',
+      lineSpacing: 3,
+      wordWrap: { width: 400 },
+    });
+
+    const effect = scene.add.text(300, y + 88, definition.effect, {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+    });
+
+    const levelText = scene.add.text(1040, y + 16, '', {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#94a3b8',
+      letterSpacing: 1,
+    }).setOrigin(1, 0);
+
+    const buyButton = createButton(scene, 960, y + 72, 180, 40, '', {
+      variant: 'primary',
+      accent: UI_COLORS.ember,
+      accentHex: '#1a1205',
+      onClick: () => handleBuy(key),
+      fontSize: 12,
+    });
+
+    cardContainer.add([
+      cardPanel,
+      icon,
+      name,
+      description,
+      effect,
+      levelText,
+      buyButton.container,
+    ]);
+    modal.add(cardContainer);
+
+    return { key, levelText, buyButton };
+  });
+
+  const refresh = (): void => {
+    const profile = controller.getProfile();
+    echoText.setText(`ЭХО: ${profile.echo}`);
+
+    for (const card of cards) {
+      const definition = UPGRADES[card.key];
+      const level = profile.upgrades[card.key];
+      const cost = getUpgradeCost(card.key, level);
+      card.levelText.setText(`УРОВЕНЬ ${level} / ${definition.maxLevel}`);
+
+      if (cost === null) {
+        card.buyButton.label.setText('МАКСИМУМ');
+        card.buyButton.label.setColor('#64748b');
+        card.buyButton.background.setFillStyle(0x1e293b, 0.9);
+        card.buyButton.background.disableInteractive();
+        card.buyButton.container.setAlpha(0.7);
+        continue;
+      }
+
+      card.buyButton.label.setText(`КУПИТЬ · ${cost}`);
+
+      if (profile.echo >= cost) {
+        card.buyButton.label.setColor('#1a1205');
+        card.buyButton.background.setFillStyle(UI_COLORS.ember, 0.96);
+        card.buyButton.background.setInteractive({ useHandCursor: true });
+        card.buyButton.container.setAlpha(1);
+      } else {
+        card.buyButton.label.setColor('#94a3b8');
+        card.buyButton.background.setFillStyle(0x1e293b, 0.9);
+        card.buyButton.background.disableInteractive();
+        card.buyButton.container.setAlpha(0.8);
+      }
+    }
+  };
+
+  function handleBuy(key: UpgradeKey): void {
+    const result = controller.buyUpgrade(key);
+    statusText.setText(result.message);
+    statusText.setColor(result.ok ? '#fbbf24' : '#fca5a5');
+    if (result.ok) {
+      onProfileChanged();
+      refresh();
+    }
+  }
+
+  const closeButton = createButton(scene, 640, 626, 220, 46, 'ЗАКРЫТЬ', {
+    variant: 'secondary',
+    onClick: () => close(),
+    fontSize: 13,
+  });
+
+  modal.add([title, divider, echoText, statusText, closeButton.container]);
+  screen.add(modal);
+
+  const open = (): void => {
+    statusText.setText('');
+    statusText.setColor('#94a3b8');
+    refresh();
+    modal.setVisible(true);
+    modal.setAlpha(0);
+    scene.tweens.add({ targets: modal, alpha: 1, duration: 160 });
+  };
+
+  function close(): void {
+    scene.tweens.add({
+      targets: modal,
+      alpha: 0,
+      duration: 140,
+      onComplete: () => modal.setVisible(false),
+    });
+  }
+
+  return { open };
+}
+
+// ============================================================================
+// ХАБ / СТАРТОВЫЙ ЭКРАН
+// ============================================================================
+
 export function drawStartScreen(
   scene: Phaser.Scene,
   overlay: Phaser.GameObjects.Container,
+  profileController: ProfileController,
   onStart: () => void,
   settingsController: SettingsController
 ): void {
-  const screen = createScreenBase(scene, overlay, UI_COLORS.ember);
-  const card = scene.add.container(scene.scale.width / 2, scene.scale.height / 2);
+  const { width, height } = scene.scale;
+  const screen = scene.add.container(0, 0);
+  overlay.add(screen);
 
-  const panel = createPanel(scene, -410, -300, 820, 600, UI_COLORS.brass, {
-    glow: true,
-  });
-  card.add(panel);
+  drawHubBackground(scene, screen, width, height);
 
-  const emblemGlow = scene.add.circle(0, -215, 52, UI_COLORS.ember, 0.14);
-  const emblem = createIcon(scene, 0, -215, 'torch', 70, UI_COLORS.emberBright);
+  // ------------------------------------------------------------ ЛОГОТИП
+  const emblemGlow = scene.add.circle(100, 96, 46, UI_COLORS.ember, 0.14);
+  const emblem = createIcon(scene, 100, 96, 'torch', 62, UI_COLORS.emberBright);
 
-  const subtitle = scene.add.text(0, -150, 'ХРОНИКИ ПОДЗЕМЕЛЬЯ', {
+  const subtitle = scene.add.text(150, 56, 'ХРОНИКИ ПОДЗЕМЕЛЬЯ', {
     fontFamily: UI_FONT.body,
-    fontSize: '11px',
+    fontSize: '10px',
     fontStyle: 'bold',
     color: '#a8844c',
-    letterSpacing: 5,
-  }).setOrigin(0.5);
-
-  const title = scene.add.text(0, -108, 'ПОСЛЕДНИЙ ФАКЕЛ КРИПТЫ', {
-    fontFamily: UI_FONT.display,
-    fontSize: '40px',
-    fontStyle: 'bold',
-    color: '#f4ecd8',
-  }).setOrigin(0.5);
-
-  const divider = createDivider(scene, 0, -64, 420, UI_COLORS.brass);
-
-  const lore = scene.add.text(
-    0,
-    -6,
-    'Древние своды трещат под натиском бездны.\n' +
-      'Пока горит пламя вашего факела, порождения тьмы цепенеют в его свете.\n' +
-      'Собирайте осколки эфира павших теней и не дайте огню угаснуть.',
-    {
-      fontFamily: UI_FONT.body,
-      fontSize: '15px',
-      color: '#c3cedd',
-      align: 'center',
-      lineSpacing: 8,
-    }
-  ).setOrigin(0.5);
-
-  // Три компактные карточки управления
-  const chips: { icon: 'move' | 'aim' | 'bolt'; title: string; keys: string }[] = [
-    { icon: 'move', title: 'ДВИЖЕНИЕ', keys: 'WASD / стрелки' },
-    { icon: 'aim', title: 'ПРИЦЕЛ', keys: 'курсор мыши' },
-    { icon: 'bolt', title: 'ВЫСТРЕЛ', keys: 'ЛКМ / Пробел' },
-  ];
-
-  chips.forEach((chip, index) => {
-    const chipContainer = scene.add.container(-220 + index * 220, 90);
-    const chipPanel = createPanel(scene, -100, -31, 200, 62, 0x4b5d77);
-    const chipIcon = createIcon(scene, -70, 0, chip.icon, 22, UI_COLORS.mana);
-    const chipTitle = scene.add.text(-48, -18, chip.title, {
-      fontFamily: UI_FONT.body,
-      fontSize: '10px',
-      fontStyle: 'bold',
-      color: '#7dd3fc',
-      letterSpacing: 1.5,
-    });
-    const chipKeys = scene.add.text(-48, 2, chip.keys, {
-      fontFamily: UI_FONT.body,
-      fontSize: '11px',
-      color: '#c3cedd',
-    });
-
-    chipContainer.add([chipPanel, chipIcon, chipTitle, chipKeys]);
-    card.add(chipContainer);
+    letterSpacing: 4,
   });
 
-  const startButton = createButton(scene, 0, 188, 360, 60, 'СПУСТИТЬСЯ В КРИПТУ', {
+  const titleLine1 = scene.add.text(148, 74, 'ПОСЛЕДНИЙ ФАКЕЛ', {
+    fontFamily: UI_FONT.display,
+    fontSize: '32px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+  });
+
+  const titleLine2 = scene.add.text(148, 110, 'КРИПТЫ', {
+    fontFamily: UI_FONT.display,
+    fontSize: '32px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+  });
+
+  const logoDivider = createDivider(scene, 300, 154, 320, UI_COLORS.brass);
+
+  const lore = scene.add.text(
+    70,
+    184,
+    'Крипта ждёт новых имён. Спуститесь в темноту,\n' +
+      'соберите Эхо павших и вернитесь в лагерь сильнее.',
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '13px',
+      color: '#c3cedd',
+      lineSpacing: 6,
+      wordWrap: { width: 430 },
+    }
+  );
+
+  // ------------------------------------------------------- КНОПКИ СПРАВА
+  const menuX = 1000;
+  const menuTitle = scene.add.text(menuX, 196, 'ЛАГЕРЬ СТРАЖА', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    fontStyle: 'bold',
+    color: '#a8844c',
+    letterSpacing: 4,
+  }).setOrigin(0.5);
+
+  const startButton = createButton(scene, menuX, 250, 320, 64, 'СПУСТИТЬСЯ', {
     variant: 'primary',
     accent: UI_COLORS.ember,
+    accentHex: '#fff7ed',
     onClick: onStart,
     fontSize: 17,
   });
 
-  const helpButton = createButton(scene, -100, 252, 190, 40, 'ПАМЯТКА', {
-    variant: 'ghost',
-    accent: UI_COLORS.brass,
-    accentHex: '#f0c674',
-    onClick: () => help.open(),
-    fontSize: 12,
+  const upgradesButton = createButton(scene, menuX, 334, 320, 50, 'УЛУЧШЕНИЯ', {
+    variant: 'secondary',
+    onClick: () => upgradesModal.open(),
+    fontSize: 14,
   });
 
-  const settingsButton = createButton(scene, 100, 252, 190, 40, 'НАСТРОЙКИ', {
+  const settingsButton = createButton(scene, menuX, 398, 320, 50, 'НАСТРОЙКИ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => settingsModal.open(),
-    fontSize: 12,
+    fontSize: 13,
   });
 
-  card.add([
+  const helpButton = createButton(scene, menuX, 462, 320, 50, 'ПАМЯТКА', {
+    variant: 'ghost',
+    accent: UI_COLORS.brass,
+    accentHex: '#f0c674',
+    onClick: () => help.open(),
+    fontSize: 13,
+  });
+
+  // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
+  const statsPanel = createPanel(scene, 840, 500, 320, 124, UI_COLORS.brass, {
+    alpha: 0.96,
+  });
+
+  const statsHeader = scene.add.text(1000, 516, 'ХРОНИКА СТРАЖА', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const statsDivider = createDivider(scene, 1000, 530, 260, UI_COLORS.brass);
+
+  const echoIcon = createIcon(scene, 886, 558, 'crystal', 20, UI_COLORS.mana);
+
+  const echoLabel = scene.add.text(904, 544, 'ЭХО', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 2,
+  });
+
+  const echoValue = scene.add.text(904, 556, '', {
+    fontFamily: UI_FONT.display,
+    fontSize: '26px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+  });
+
+  const rankMedallion = createMedallion(scene, 1106, 556, 22, UI_COLORS.brass);
+  const rankValue = scene.add.text(1106, 556, '', {
+    fontFamily: UI_FONT.display,
+    fontSize: '22px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+  }).setOrigin(0.5);
+  const rankLabel = scene.add.text(1106, 588, 'РАНГ', {
+    fontFamily: UI_FONT.body,
+    fontSize: '8px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const statsSummary = scene.add.text(1000, 610, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    color: '#94a3b8',
+  }).setOrigin(0.5);
+
+  const refreshStats = (): void => {
+    const profile = profileController.getProfile();
+    echoValue.setText(`${profile.echo}`);
+    rankValue.setText(profile.bestRank ?? '—');
+    statsSummary.setText(
+      `Спуски ${profile.runs} · Победы ${profile.victories} · Лучший счёт ${profile.bestScore}`
+    );
+  };
+  refreshStats();
+
+  screen.add([
     emblemGlow,
     emblem,
     subtitle,
-    title,
-    divider,
+    titleLine1,
+    titleLine2,
+    logoDivider,
     lore,
+    menuTitle,
     startButton.container,
-    helpButton.container,
+    upgradesButton.container,
     settingsButton.container,
+    helpButton.container,
+    statsPanel,
+    statsHeader,
+    statsDivider,
+    echoIcon,
+    echoLabel,
+    echoValue,
+    rankMedallion,
+    rankValue,
+    rankLabel,
+    statsSummary,
   ]);
-  screen.add(card);
 
   const help = createHelpModal(scene, screen);
   const settingsModal = createSettingsModal(scene, screen, settingsController);
+  const upgradesModal = createUpgradesModal(scene, screen, profileController, refreshStats);
 
   scene.tweens.add({
     targets: emblemGlow,
@@ -547,8 +811,6 @@ export function drawStartScreen(
     repeat: -1,
     ease: 'Sine.easeInOut',
   });
-
-  animateCardIn(scene, card);
 }
 
 // ============================================================================
@@ -703,7 +965,7 @@ function drawResultScreen(
 
   const footnote = scene.add.text(
     0,
-    158,
+    146,
     `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled}`,
     {
       fontFamily: UI_FONT.body,
@@ -713,7 +975,20 @@ function drawResultScreen(
     }
   ).setOrigin(0.5);
 
-  const primaryButton = createButton(scene, 0, 210, 340, 58, options.primaryLabel, {
+  const echoText = scene.add.text(
+    0,
+    170,
+    `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      letterSpacing: 2,
+    }
+  ).setOrigin(0.5);
+
+  const primaryButton = createButton(scene, 0, 218, 340, 58, options.primaryLabel, {
     variant: 'primary',
     accent: options.accent,
     accentHex: options.primaryTextColor,
@@ -721,7 +996,7 @@ function drawResultScreen(
     fontSize: 17,
   });
 
-  const secondaryButton = createButton(scene, 0, 276, 300, 46, 'В ГЛАВНОЕ МЕНЮ', {
+  const secondaryButton = createButton(scene, 0, 280, 300, 46, 'В ЛАГЕРЬ', {
     variant: 'secondary',
     onClick: options.onBackToMenu,
     fontSize: 14,
@@ -734,6 +1009,7 @@ function drawResultScreen(
     rankBlock,
     rankTitle,
     footnote,
+    echoText,
     primaryButton.container,
     secondaryButton.container,
   ]);
@@ -754,7 +1030,7 @@ export function drawGameOverScreen(
     title: 'ФАКЕЛ ПОГАС',
     accent: 0xef4444,
     accentHex: '#f87171',
-    primaryLabel: 'ПОПРОБОВАТЬ ЕЩЁ',
+    primaryLabel: 'ЕЩЁ РАЗ',
     primaryTextColor: '#fff5f5',
     onRetry,
     onBackToMenu,
@@ -773,7 +1049,7 @@ export function drawVictoryScreen(
     title: 'КРИПТА ОЧИЩЕНА',
     accent: 0xfbbf24,
     accentHex: '#f0c674',
-    primaryLabel: 'СЫГРАТЬ ЕЩЁ',
+    primaryLabel: 'ЕЩЁ РАЗ',
     primaryTextColor: '#1a1205',
     onRetry,
     onBackToMenu,
@@ -877,7 +1153,7 @@ export function drawPauseScreen(
     fontSize: 12,
   });
 
-  const menuButton = createButton(scene, 115, 244, 220, 40, 'В ГЛАВНОЕ МЕНЮ', {
+  const menuButton = createButton(scene, 115, 244, 220, 40, 'В ЛАГЕРЬ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',

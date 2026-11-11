@@ -528,6 +528,34 @@ export function createSlider(
 // АТМОСФЕРА
 // ============================================================================
 
+/** Ключ общей текстуры радиального свечения. */
+export const GLOW_TEXTURE_KEY = 'ui-radial-glow';
+
+/**
+ * Радиальный градиент для свечения: одна canvas-текстура на всю игру.
+ * Возвращает ключ, чтобы её можно было использовать и как кисть света.
+ */
+export function ensureGlowTexture(scene: Phaser.Scene, size = 512): string {
+  if (!scene.textures.exists(GLOW_TEXTURE_KEY)) {
+    const texture = scene.textures.createCanvas(GLOW_TEXTURE_KEY, size, size);
+    if (texture) {
+      const ctx = texture.context;
+      const half = size / 2;
+      const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.9)');
+      gradient.addColorStop(0.72, 'rgba(255, 255, 255, 0.42)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      texture.refresh();
+    }
+  }
+
+  return GLOW_TEXTURE_KEY;
+}
+
 /** Медленно поднимающиеся угли. Добавляются в переданный контейнер. */
 export function spawnEmbers(
   scene: Phaser.Scene,

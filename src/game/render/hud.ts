@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GAME_CONFIG } from '../core/gameConfig';
 import type { PhaseKey } from '../core/phases';
+import { UPGRADES } from '../core/upgrades';
 import {
   createIcon,
   createMedallion,
@@ -29,6 +30,8 @@ export interface BossHudStats {
 /** Данные, которые HUD показывает каждый кадр. */
 export interface HudStats {
   hp: number;
+  /** Текущий максимум здоровья с учётом улучшений. */
+  maxHp: number;
   mana: number;
   score: number;
   killsCount: number;
@@ -96,7 +99,8 @@ const HP_BAR = {
   width: 260,
   height: 16,
   gap: 4,
-  count: GAME_CONFIG.PLAYER.MAX_HP,
+  /** Запасной максимум: базовые HP плюс все уровни «Крепкой стражи». */
+  count: GAME_CONFIG.PLAYER.MAX_HP + UPGRADES.VITALITY.maxLevel,
 };
 
 const MANA_BAR = {
@@ -512,10 +516,26 @@ export function updateHud(parts: HudParts, stats: HudStats): void {
   }
   parts.hpFlash.setAlpha(Math.max(0, parts.hpFlash.alpha - stats.dt * 2.4));
 
+  const maxHp = Math.max(1, stats.maxHp);
+  const slotWidth = (HP_BAR.width - HP_BAR.gap * (maxHp - 1)) / maxHp;
+
   for (let i = 0; i < parts.hpSegments.length; i++) {
+    const segment = parts.hpSegments[i];
+
+    // Сегментов в HUD с запасом: лишние скрываются, а ширина оставшихся
+    // пересчитывается под текущий максимум здоровья.
+    if (i >= maxHp) {
+      segment.setVisible(false);
+      continue;
+    }
+
+    segment.setVisible(true);
+    segment.setSize(slotWidth, HP_BAR.height);
+    segment.setPosition(HP_BAR.x + i * (slotWidth + HP_BAR.gap), HP_BAR.y);
+
     const filled = i < stats.hp;
-    parts.hpSegments[i].setFillStyle(filled ? UI_COLORS.blood : 0x1e293b, filled ? 1 : 0.85);
-    parts.hpSegments[i].setStrokeStyle(1, filled ? 0xfca5a5 : 0x475569, filled ? 0.75 : 0.5);
+    segment.setFillStyle(filled ? UI_COLORS.blood : 0x1e293b, filled ? 1 : 0.85);
+    segment.setStrokeStyle(1, filled ? 0xfca5a5 : 0x475569, filled ? 0.75 : 0.5);
   }
   parts.prevHp = stats.hp;
 

@@ -17,6 +17,7 @@ export interface EnemyEntity {
   eyes: Phaser.GameObjects.Arc[];
   glow?: Phaser.GameObjects.Arc;
   hpBar?: Phaser.GameObjects.Rectangle;
+  hpBarBack?: Phaser.GameObjects.Rectangle;
   x: number;
   y: number;
   hp: number;

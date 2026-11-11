@@ -5,7 +5,19 @@ import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
 import { WAVES, type WaveConfig } from './core/waves';
 import { xpToNextLevel } from './core/progression';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
+import {
+  applyRun,
+  calculateRank,
+  loadProfile,
+  purchaseUpgrade,
+  saveProfile,
+  type Profile,
+} from './core/profile';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
+import {
+  getUpgradeBonuses,
+  type UpgradeKey,
+} from './core/upgrades';
 import type {
   EnemyEntity,
   EnemyProjectileEntity,
@@ -22,6 +34,7 @@ import {
   createDeathEffect,
   createExplosionEffect,
   createHitSpark,
+  createShotFlash,
   showFloatingText,
   showPhaseNotice,
   showWaveNotice,
@@ -37,8 +50,16 @@ import {
   drawPauseScreen,
   drawStartScreen,
   drawVictoryScreen,
+  type GameOverStats,
+  type ProfileController,
   type SettingsController,
 } from './render/screens';
+import {
+  createVignette,
+  ensureGlowTexture,
+  GLOW_TEXTURE_KEY,
+  UI_COLORS,
+} from './render/uiKit';
 
 // ============================================================================
 // ОСНОВНАЯ СЦЕНА ИГРЫ
@@ -69,11 +90,23 @@ export class GameScene extends Phaser.Scene {
   private mana: number = GAME_CONFIG.COMBAT.START_MANA;
   private invulnTimer = 0;
 
+  // Постоянный прогресс и рассчитанные из улучшений характеристики
+  private profile: Profile = loadProfile();
+  private maxHp: number = GAME_CONFIG.PLAYER.MAX_HP;
+  private startMana: number = GAME_CONFIG.COMBAT.START_MANA;
+  private lightMultiplier = 1;
+  /** Защита от повторной записи одного и того же забега. */
+  private runRecorded = false;
+
   // Система Света и Тьмы
   private darknessOverlay!: Phaser.GameObjects.RenderTexture;
-  private lightCutout!: Phaser.GameObjects.Graphics;
-  private smallLightCutout!: Phaser.GameObjects.Graphics;
-  private ambientGlow!: Phaser.GameObjects.Arc;
+  /** Кисти-источники для вырезания света: у каждой свой размер на кадр. */
+  private lightBrush!: Phaser.GameObjects.Image;
+  private smallLightBrush!: Phaser.GameObjects.Image;
+  private torchLightBrush!: Phaser.GameObjects.Image;
+  private torchLights: WorldCrack[] = [];
+  private lowHpVignette!: Phaser.GameObjects.Graphics;
+  private ambientGlow!: Phaser.GameObjects.Image;
   /** Текущая фаза факела: свет и скорость игрока берутся из PHASES. */
   private currentPhase: PhaseKey = getPhase(0);
   private currentLightRadius: number = PHASES[getPhase(0)].lightRadius;
@@ -145,15 +178,19 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.cracks = drawCryptEnvironment(this);
+    const layout = drawCryptEnvironment(this);
+    this.cracks = layout.cracks;
+    this.torchLights = layout.torches;
 
-    this.ambientGlow = this.add.circle(
-      this.playerX,
-      this.playerY,
-      this.currentLightRadius,
-      GAME_CONFIG.LIGHT.AMBIENT_COLOR,
-      GAME_CONFIG.LIGHT.AMBIENT_ALPHA
-    ).setDepth(5);
+    const glowKey = ensureGlowTexture(this);
+
+    this.ambientGlow = this.add
+      .image(this.playerX, this.playerY, glowKey)
+      .setDepth(5)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(GAME_CONFIG.LIGHT.AMBIENT_COLOR)
+      .setAlpha(GAME_CONFIG.LIGHT.AMBIENT_ALPHA)
+      .setDisplaySize(this.currentLightRadius * 2.2, this.currentLightRadius * 2.2);
 
     this.playerVisual = createPlayer(this, this.playerX, this.playerY);
     this.player = this.playerVisual.container;
@@ -175,7 +212,18 @@ export class GameScene extends Phaser.Scene {
     this.setupInputs();
     this.hud = createHud(this);
     this.uiOverlay = this.add.container(0, 0).setDepth(40);
+    this.lowHpVignette = createVignette(
+      this,
+      GAME_CONFIG.WORLD.WIDTH,
+      GAME_CONFIG.WORLD.HEIGHT,
+      UI_COLORS.blood,
+      0.5
+    )
+      .setDepth(26)
+      .setVisible(false)
+      .setAlpha(0);
     this.setupAudio();
+    this.applyProfileBonuses();
 
     this.showStartScreen();
   }
@@ -244,6 +292,29 @@ export class GameScene extends Phaser.Scene {
     return controller;
   }
 
+  /** Пересчитывает характеристики стража из купленных улучшений. */
+  private applyProfileBonuses(): void {
+    const bonuses = getUpgradeBonuses(this.profile.upgrades);
+    this.maxHp = GAME_CONFIG.PLAYER.MAX_HP + bonuses.maxHpBonus;
+    this.startMana = GAME_CONFIG.COMBAT.START_MANA + bonuses.startManaBonus;
+    this.lightMultiplier = bonuses.lightMultiplier;
+  }
+
+  private getProfileController(): ProfileController {
+    return {
+      getProfile: () => this.profile,
+      buyUpgrade: (key: UpgradeKey) => {
+        const result = purchaseUpgrade(this.profile, key);
+        if (result.ok) {
+          this.profile = result.profile;
+          saveProfile(this.profile);
+          this.applyProfileBonuses();
+        }
+        return { ok: result.ok, message: result.message };
+      },
+    };
+  }
+
   update(time: number, delta: number): void {
     const dt = delta / 1000;
 
@@ -255,6 +326,7 @@ export class GameScene extends Phaser.Scene {
       }
       this.player.setAlpha(1);
       this.invulnRing.setVisible(false);
+      this.lowHpVignette.setVisible(false);
       this.renderDarkness();
       return;
     }
@@ -276,8 +348,21 @@ export class GameScene extends Phaser.Scene {
     this.updateEnemyProjectiles(dt);
     this.updateManaOrbs(dt, time);
     this.updateEnemies(dt, time);
+    this.updateLowHpVignette(time);
     this.renderDarkness();
     this.updateHUD(dt);
+  }
+
+  /** Пульсирующая красная рамка при низком здоровье. */
+  private updateLowHpVignette(time: number): void {
+    if (this.hp / this.maxHp > 0.34) {
+      this.lowHpVignette.setVisible(false);
+      return;
+    }
+
+    this.lowHpVignette
+      .setVisible(true)
+      .setAlpha(0.24 + Math.sin(time * 0.006) * 0.1);
   }
 
   // ============================================================================
@@ -290,34 +375,26 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setDepth(20);
 
-    this.lightCutout = this.make.graphics({}, false);
-    this.rebuildLightBrush(this.currentLightRadius);
-
-    this.smallLightCutout = this.make.graphics({}, false);
-    this.smallLightCutout.fillStyle(0xffffff, 0.35);
-    this.smallLightCutout.fillCircle(0, 0, 48);
-    this.smallLightCutout.fillStyle(0xffffff, 0.85);
-    this.smallLightCutout.fillCircle(0, 0, 24);
+    // Кисти не добавляются на сцену: они нужны только как источник для erase.
+    // В типах Phaser 4 у GameObjectConfig нет поля key, хотя creator его читает.
+    this.lightBrush = this.createLightBrush();
+    this.smallLightBrush = this.createLightBrush().setDisplaySize(140, 140);
+    this.torchLightBrush = this.createLightBrush().setDisplaySize(210, 210);
   }
 
-  private rebuildLightBrush(radius: number): void {
-    this.lightCutout.clear();
-    this.lightCutout.fillStyle(0xffffff, 0.2);
-    this.lightCutout.fillCircle(0, 0, radius * 1.18);
-    this.lightCutout.fillStyle(0xffffff, 0.45);
-    this.lightCutout.fillCircle(0, 0, radius * 1.06);
-    this.lightCutout.fillStyle(0xffffff, 0.8);
-    this.lightCutout.fillCircle(0, 0, radius * 0.92);
-    this.lightCutout.fillStyle(0xffffff, 1.0);
-    this.lightCutout.fillCircle(0, 0, radius * 0.75);
+  /** Кисть с прозрачным краем: одна текстура, отдельный объект на каждый размер. */
+  private createLightBrush(): Phaser.GameObjects.Image {
+    return this.make.image(
+      { key: GLOW_TEXTURE_KEY } as Phaser.Types.GameObjects.GameObjectConfig & { key: string },
+      false
+    );
   }
 
   /** Меняет радиус света только если он действительно изменился. */
   private setLightRadius(radius: number): void {
     if (Math.abs(radius - this.currentLightRadius) < 0.5) return;
     this.currentLightRadius = radius;
-    this.rebuildLightBrush(radius);
-    this.ambientGlow.setRadius(radius);
+    this.ambientGlow.setDisplaySize(radius * 2.2, radius * 2.2);
   }
 
   private renderDarkness(): void {
@@ -327,13 +404,23 @@ export class GameScene extends Phaser.Scene {
       GAME_CONFIG.LIGHT.DARKNESS_ALPHA
     );
 
-    this.darknessOverlay.erase(this.lightCutout, this.playerX, this.playerY);
+    const time = this.time.now;
+    const flicker = 1 + Math.sin(time * 0.006) * 0.025 + Math.sin(time * 0.017) * 0.015;
+    const radius = this.currentLightRadius * flicker;
+
+    this.lightBrush.setDisplaySize(radius * 2.3, radius * 2.3);
+    this.darknessOverlay.erase(this.lightBrush, this.playerX, this.playerY);
 
     for (const p of this.projectiles) {
-      this.darknessOverlay.erase(this.smallLightCutout, p.x, p.y);
+      this.darknessOverlay.erase(this.smallLightBrush, p.x, p.y);
     }
     for (const orb of this.manaOrbs) {
-      this.darknessOverlay.erase(this.smallLightCutout, orb.x, orb.y);
+      this.darknessOverlay.erase(this.smallLightBrush, orb.x, orb.y);
+    }
+
+    // Настенные факелы дают небольшие пятна света у стен.
+    for (const torch of this.torchLights) {
+      this.darknessOverlay.erase(this.torchLightBrush, torch.x, torch.y);
     }
   }
 
@@ -397,6 +484,7 @@ export class GameScene extends Phaser.Scene {
     this.playerY = Phaser.Math.Clamp(this.playerY + vy * speed * dt, PADDING, HEIGHT - PADDING);
 
     this.player.setPosition(this.playerX, this.playerY);
+    this.playerVisual.shadow.setPosition(this.playerX + 2, this.playerY + 13);
     this.ambientGlow.setPosition(this.playerX, this.playerY);
 
     const pointer = this.input.activePointer;
@@ -449,9 +537,14 @@ export class GameScene extends Phaser.Scene {
     const spawnY = this.playerY + Math.sin(this.aimAngle) * 26;
 
     const container = this.add.container(spawnX, spawnY).setDepth(25);
+    const halo = this.add
+      .circle(0, 0, PROJECTILE_RADIUS + 10, 0x38bdf8, 0.22)
+      .setBlendMode(Phaser.BlendModes.ADD);
     const outerGlow = this.add.circle(0, 0, PROJECTILE_RADIUS + 4, 0x0284c7, 0.45);
     const core = this.add.circle(0, 0, PROJECTILE_RADIUS, 0xe0f2fe).setStrokeStyle(2, 0x38bdf8);
-    container.add([outerGlow, core]);
+    container.add([halo, outerGlow, core]);
+
+    createShotFlash(this, spawnX, spawnY);
 
     this.projectiles.push({
       container,
@@ -498,12 +591,19 @@ export class GameScene extends Phaser.Scene {
   private spawnManaOrb(x: number, y: number, value: number): void {
     const container = this.add.container(x, y).setDepth(14);
 
-    const aura = this.add.circle(0, 0, 11, 0x0284c7, 0.35);
+    const aura = this.add.circle(0, 0, 16, 0x38bdf8, 0.18).setBlendMode(Phaser.BlendModes.ADD);
     const diamond = this.add.rectangle(0, 0, 10, 10, 0x38bdf8)
       .setRotation(Math.PI / 4)
       .setStrokeStyle(1.5, 0xe0f2fe);
 
     container.add([aura, diamond]);
+
+    this.tweens.add({
+      targets: diamond,
+      rotation: Math.PI / 4 + Math.PI * 2,
+      duration: 4200,
+      repeat: -1,
+    });
 
     this.manaOrbs.push({
       container,
@@ -660,7 +760,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Короткая передышка между волнами.
-    this.hp = Math.min(GAME_CONFIG.PLAYER.MAX_HP, this.hp + 1);
+    this.hp = Math.min(this.maxHp, this.hp + 1);
     this.mana = Math.min(GAME_CONFIG.COMBAT.MAX_MANA, this.mana + 25);
     this.waveTransitionTimer = 2.5;
     showFloatingText(this, this.playerX, this.playerY - 34, 'Волна пройдена', '#fbbf24');
@@ -672,7 +772,13 @@ export class GameScene extends Phaser.Scene {
     const visual = createEnemyVisual(this, type, cfg, crack.x, crack.y);
 
     if (visual.hpBar) {
-      visual.hpBar.setData('maxWidth', visual.hpBar.width);
+      const maxWidth = visual.hpBar.width;
+      const barY = crack.y - cfg.radius - 14;
+      visual.hpBar.setData('maxWidth', maxWidth);
+      visual.hpBar.setPosition(crack.x - maxWidth / 2, barY);
+    }
+    if (visual.hpBarBack) {
+      visual.hpBarBack.setPosition(crack.x, crack.y - cfg.radius - 14);
     }
 
     this.enemies.push({
@@ -684,6 +790,7 @@ export class GameScene extends Phaser.Scene {
       eyes: visual.eyes,
       glow: visual.glow,
       hpBar: visual.hpBar,
+      hpBarBack: visual.hpBarBack,
       x: crack.x,
       y: crack.y,
       hp: cfg.hp,
@@ -786,6 +893,8 @@ export class GameScene extends Phaser.Scene {
           } else if (e.hpBar) {
             const maxWidth = (e.hpBar.getData('maxWidth') as number | undefined) ?? 34;
             e.hpBar.width = Math.max(0, (e.hp / e.maxHp) * maxWidth);
+            e.hpBar.setVisible(true);
+            e.hpBarBack?.setVisible(true);
           }
 
           if (e.hp <= 0) {
@@ -822,7 +931,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (e.hpBar) {
-      e.hpBar.setRotation(-e.container.rotation);
+      const maxWidth = (e.hpBar.getData('maxWidth') as number | undefined) ?? 34;
+      const barY = e.y - e.config.radius - 14;
+      e.hpBar.setPosition(e.x - maxWidth / 2, barY);
+      e.hpBarBack?.setPosition(e.x, barY);
     }
 
     // Мученик пульсирует перед взрывом.
@@ -968,7 +1080,6 @@ export class GameScene extends Phaser.Scene {
         this.torchDrainTimer = cfg.drainDuration;
         this.applyCurrentPhase();
         showFloatingText(this, this.playerX, this.playerY - 36, 'ФАКЕЛ ГАСНЕТ', '#ef4444');
-        this.cameras.main.shake(200, 0.008);
       }
 
       // Подготовка рывка.
@@ -1105,6 +1216,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     e.container.destroy();
+    e.hpBar?.destroy();
+    e.hpBarBack?.destroy();
     this.enemies.splice(index, 1);
   }
 
@@ -1117,6 +1230,8 @@ export class GameScene extends Phaser.Scene {
     for (const e of this.enemies) {
       createDeathEffect(this, e.x, e.y, e.config.strokeColor);
       e.container.destroy();
+      e.hpBar?.destroy();
+      e.hpBarBack?.destroy();
     }
     this.enemies = [];
 
@@ -1205,6 +1320,7 @@ export class GameScene extends Phaser.Scene {
 
     updateHud(this.hud, {
       hp: this.hp,
+      maxHp: this.maxHp,
       mana: this.mana,
       score: this.score,
       killsCount: this.killsCount,
@@ -1235,7 +1351,11 @@ export class GameScene extends Phaser.Scene {
 
   /** Убирает с поля все игровые объекты (враги, снаряды, кристаллы маны). */
   private clearField(): void {
-    this.enemies.forEach((e) => e.container.destroy());
+    this.enemies.forEach((e) => {
+      e.container.destroy();
+      e.hpBar?.destroy();
+      e.hpBarBack?.destroy();
+    });
     this.projectiles.forEach((p) => p.container.destroy());
     this.manaOrbs.forEach((m) => m.container.destroy());
     this.clearEnemyProjectiles();
@@ -1264,6 +1384,7 @@ export class GameScene extends Phaser.Scene {
     this.playerX = GAME_CONFIG.PLAYER.START_X;
     this.playerY = GAME_CONFIG.PLAYER.START_Y;
     this.player.setPosition(this.playerX, this.playerY);
+    this.playerVisual.shadow.setPosition(this.playerX + 2, this.playerY + 13);
     this.ambientGlow.setPosition(this.playerX, this.playerY);
   }
 
@@ -1284,6 +1405,7 @@ export class GameScene extends Phaser.Scene {
     drawStartScreen(
       this,
       this.uiOverlay,
+      this.getProfileController(),
       () => this.startGame(),
       this.getSettingsController()
     );
@@ -1292,10 +1414,12 @@ export class GameScene extends Phaser.Scene {
   private startGame(): void {
     this.clearField();
     this.resetPlayerPosition();
+    this.applyProfileBonuses();
 
-    this.hp = GAME_CONFIG.PLAYER.MAX_HP;
-    this.mana = GAME_CONFIG.COMBAT.START_MANA;
+    this.hp = this.maxHp;
+    this.mana = this.startMana;
     this.invulnTimer = 0;
+    this.runRecorded = false;
     this.player.setAlpha(1);
     this.invulnRing.setVisible(false);
 
@@ -1334,20 +1458,7 @@ export class GameScene extends Phaser.Scene {
     this.beginWave(0);
   }
 
-  private buildStats(victory = false): {
-    score: number;
-    killsCount: number;
-    survivalTime: number;
-    manaCollected: number;
-    accuracy: number;
-    wave: number;
-    wavesTotal: number;
-    level: number;
-    bossesKilled: number;
-    hp: number;
-    maxHp: number;
-    victory: boolean;
-  } {
+  private buildStats(victory = false): GameOverStats {
     const accuracy = this.shotsFired > 0
       ? Math.round((this.shotsHit / this.shotsFired) * 100)
       : 0;
@@ -1363,12 +1474,44 @@ export class GameScene extends Phaser.Scene {
       level: this.level,
       bossesKilled: this.bossesKilled,
       hp: this.hp,
-      maxHp: GAME_CONFIG.PLAYER.MAX_HP,
+      maxHp: this.maxHp,
+      echoGained: 0,
+      echoTotal: this.profile.echo,
       victory,
     };
   }
 
+  /** Записывает забег в профиль один раз и возвращает статистику для экрана. */
+  private finishRun(victory: boolean): GameOverStats {
+    const stats = this.buildStats(victory);
+
+    if (this.runRecorded) {
+      stats.echoGained = 0;
+      stats.echoTotal = this.profile.echo;
+      return stats;
+    }
+
+    this.runRecorded = true;
+    const reward = applyRun(this.profile, {
+      score: stats.score,
+      survivalTime: stats.survivalTime,
+      wave: stats.wave,
+      victory,
+      bossesKilled: stats.bossesKilled,
+      rank: calculateRank(stats).letter,
+    });
+
+    this.profile = reward.profile;
+    saveProfile(this.profile);
+    stats.echoGained = reward.echoGained;
+    stats.echoTotal = this.profile.echo;
+
+    return stats;
+  }
+
   private triggerGameOver(): void {
+    if (this.gameState === 'GAMEOVER' || this.gameState === 'VICTORY') return;
+
     this.gameState = 'GAMEOVER';
     clearAllNotices(this);
     this.hud.container.setVisible(false);
@@ -1382,13 +1525,15 @@ export class GameScene extends Phaser.Scene {
     drawGameOverScreen(
       this,
       this.uiOverlay,
-      this.buildStats(false),
+      this.finishRun(false),
       () => this.startGame(),
       () => this.showStartScreen()
     );
   }
 
   private triggerVictory(): void {
+    if (this.gameState === 'GAMEOVER' || this.gameState === 'VICTORY') return;
+
     this.gameState = 'VICTORY';
     clearAllNotices(this);
     this.hud.container.setVisible(false);
@@ -1402,7 +1547,7 @@ export class GameScene extends Phaser.Scene {
     drawVictoryScreen(
       this,
       this.uiOverlay,
-      this.buildStats(true),
+      this.finishRun(true),
       () => this.startGame(),
       () => this.showStartScreen()
     );
@@ -1460,7 +1605,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Применяет свойства текущей фазы: радиус света и свечение вокруг игрока. */
   private applyCurrentPhase(): void {
-    const baseRadius = PHASES[this.currentPhase].lightRadius;
+    const baseRadius = PHASES[this.currentPhase].lightRadius * this.lightMultiplier;
     const radius = this.torchDrainTimer > 0
       ? Math.min(baseRadius, BOSS_CONFIG.FLAME_EATER.drainRadius)
       : baseRadius;

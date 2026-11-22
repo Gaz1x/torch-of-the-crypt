@@ -42,6 +42,8 @@ export interface HudStats {
   xpToNext: number;
   wave: number;
   wavesTotal: number;
+  /** «ЭТАЖ I» — показывается в строке волны. */
+  floorLabel: string;
   waveName: string;
   enemiesLeft: number;
   /** Для боссовой волны — число живых мобов свиты (без самого босса). */
@@ -556,7 +558,10 @@ export function updateHud(parts: HudParts, stats: HudStats): void {
   setTextIfChanged(parts.levelText, `${stats.level}`);
 
   // --- Волна ---
-  setTextIfChanged(parts.waveText, `ВОЛНА ${stats.wave} / ${stats.wavesTotal}`);
+  setTextIfChanged(
+    parts.waveText,
+    `${stats.floorLabel} · ВОЛНА ${stats.wave} / ${stats.wavesTotal}`
+  );
   setTextIfChanged(parts.waveNameText, stats.waveName);
   setTextIfChanged(parts.waveMedallionText, `${stats.wave}`);
   setTextIfChanged(

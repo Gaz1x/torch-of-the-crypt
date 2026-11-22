@@ -5,6 +5,7 @@ import {
   type RankResult,
 } from '../core/profile';
 import { DEFAULT_SETTINGS, type GameSettings } from '../core/settings';
+import type { BoonDefinition, BoonKey } from '../core/boons';
 import {
   getUpgradeCost,
   UPGRADE_ORDER,
@@ -1176,4 +1177,108 @@ export function drawPauseScreen(
   const settingsModal = createSettingsModal(scene, screen, settingsController);
 
   animateCardIn(scene, card);
+}
+
+// ============================================================================
+// ДАРЫ ЭТАЖА
+// ============================================================================
+
+const BOON_ICONS: Record<BoonKey, 'bolt' | 'aim' | 'crystal' | 'banner'> = {
+  RAPID_FIRE: 'bolt',
+  DOUBLE_SHOT: 'aim',
+  PIERCE: 'crystal',
+  VITALITY: 'banner',
+};
+
+/** Модалка выбора дара после этажа. Игра стоит, пока игрок не выберет. */
+export function showBoonChoice(
+  scene: Phaser.Scene,
+  overlay: Phaser.GameObjects.Container,
+  choices: BoonDefinition[],
+  onPick: (key: BoonKey) => void
+): void {
+  const { width, height } = scene.scale;
+
+  const backdrop = scene.add
+    .rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.78)
+    .setInteractive();
+  overlay.add(backdrop);
+
+  const panel = createPanel(scene, 120, 86, 1040, 548, UI_COLORS.ember, { glow: true });
+  overlay.add(panel);
+
+  const title = scene.add.text(640, 132, 'ДАРЫ ЭТАЖА', {
+    fontFamily: UI_FONT.display,
+    fontSize: '34px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const subtitle = scene.add.text(640, 170, 'Выберите один дар — он продержится до конца спуска', {
+    fontFamily: UI_FONT.body,
+    fontSize: '12px',
+    color: '#a9b7c9',
+  }).setOrigin(0.5);
+
+  overlay.add([title, subtitle]);
+  overlay.add(createDivider(scene, 640, 196, 520, UI_COLORS.ember));
+
+  const cardWidth = 290;
+  const gap = 30;
+  const totalWidth = choices.length * cardWidth + (choices.length - 1) * gap;
+  const startX = 640 - totalWidth / 2;
+
+  choices.forEach((choice, index) => {
+    const x = startX + index * (cardWidth + gap);
+    const y = 228;
+
+    const card = createPanel(scene, x, y, cardWidth, 300, UI_COLORS.brass);
+    overlay.add(card);
+
+    const icon = createIcon(scene, x + cardWidth / 2, y + 46, BOON_ICONS[choice.key], 28, UI_COLORS.emberBright);
+    const name = scene.add.text(x + cardWidth / 2, y + 86, choice.name, {
+      fontFamily: UI_FONT.display,
+      fontSize: '17px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      align: 'center',
+      wordWrap: { width: cardWidth - 36 },
+    }).setOrigin(0.5, 0);
+
+    const cardDivider = createDivider(scene, x + cardWidth / 2, y + 120, cardWidth - 60, UI_COLORS.brass);
+
+    const description = scene.add.text(x + 22, y + 140, choice.description, {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      color: '#c3cedd',
+      lineSpacing: 3,
+      wordWrap: { width: cardWidth - 44 },
+    });
+
+    const effect = scene.add.text(x + 22, y + 212, choice.effect, {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+      wordWrap: { width: cardWidth - 44 },
+    });
+
+    const pickButton = createButton(scene, x + cardWidth / 2, y + 266, cardWidth - 70, 40, 'ВЗЯТЬ', {
+      variant: 'primary',
+      accent: UI_COLORS.ember,
+      accentHex: '#1a1205',
+      onClick: () => onPick(choice.key),
+      fontSize: 13,
+    });
+
+    overlay.add([icon, name, cardDivider, description, effect, pickButton.container]);
+  });
+
+  const note = scene.add.text(640, 600, 'Дар действует только в этом спуске', {
+    fontFamily: UI_FONT.body,
+    fontSize: '11px',
+    color: '#7c8ba1',
+  }).setOrigin(0.5);
+  overlay.add(note);
 }

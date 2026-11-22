@@ -2,9 +2,10 @@ import Phaser from 'phaser';
 import soundtrackUrl from '../assets/audio/soundtrack.mp3';
 import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameConfig';
 import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
-import { WAVES, type WaveConfig } from './core/waves';
+import { WAVES, getFloorIndex, isFloorEnd, type WaveConfig } from './core/waves';
 import { xpToNextLevel } from './core/progression';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
+import { pickBoonChoices, type BoonKey } from './core/boons';
 import {
   applyRun,
   calculateRank,
@@ -50,6 +51,7 @@ import {
   drawPauseScreen,
   drawStartScreen,
   drawVictoryScreen,
+  showBoonChoice,
   type GameOverStats,
   type ProfileController,
   type SettingsController,
@@ -68,7 +70,10 @@ import {
 // отрисовка — в папке render/.
 // ============================================================================
 
-type GameState = 'START' | 'PLAYING' | 'PAUSED' | 'GAMEOVER' | 'VICTORY';
+type GameState = 'START' | 'PLAYING' | 'PAUSED' | 'GIFT' | 'GAMEOVER' | 'VICTORY';
+
+/** Римские номера этажей для строки HUD. */
+const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
 
 /** BaseSound в типах Phaser не объявляет setVolume, хотя все реальные звуки его имеют. */
 type VolumeControlledSound = Phaser.Sound.BaseSound & {
@@ -129,6 +134,8 @@ export class GameScene extends Phaser.Scene {
   private guaranteedQueue: EnemyTypeKey[] = [];
   /** Таймер следующего появления свиты босса. */
   private bossAddsTimer = 0;
+  /** Дары, выбранные в этом спуске. Живут только до конца партии. */
+  private boons = new Set<BoonKey>();
 
   // Звук и настройки
   private settings: GameSettings = loadSettings();
@@ -499,7 +506,7 @@ export class GameScene extends Phaser.Scene {
 
     this.cooldownArc.clear();
     if (this.fireCooldown > 0) {
-      const progress = 1 - this.fireCooldown / GAME_CONFIG.COMBAT.FIRE_COOLDOWN;
+      const progress = 1 - this.fireCooldown / this.getFireCooldown();
       this.cooldownArc.lineStyle(2.5, 0x38bdf8, 0.8);
       this.cooldownArc.beginPath();
       this.cooldownArc.arc(
@@ -519,6 +526,13 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /** Перезарядка с учётом дара «Скорое пламя». */
+  private getFireCooldown(): number {
+    return this.boons.has('RAPID_FIRE')
+      ? GAME_CONFIG.COMBAT.FIRE_COOLDOWN * 0.75
+      : GAME_CONFIG.COMBAT.FIRE_COOLDOWN;
+  }
+
   private tryFireProjectile(): void {
     if (this.fireCooldown > 0) return;
 
@@ -529,12 +543,21 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.mana -= GAME_CONFIG.COMBAT.SHOT_MANA_COST;
-    this.fireCooldown = GAME_CONFIG.COMBAT.FIRE_COOLDOWN;
+    this.fireCooldown = this.getFireCooldown();
     this.shotsFired++;
 
+    this.spawnPlayerProjectile(this.aimAngle);
+
+    // «Раздвоенный луч»: второй снаряд летит чуть вбок.
+    if (this.boons.has('DOUBLE_SHOT')) {
+      this.spawnPlayerProjectile(this.aimAngle + 0.13);
+    }
+  }
+
+  private spawnPlayerProjectile(angle: number): void {
     const { PROJECTILE_SPEED, PROJECTILE_LIFE, PROJECTILE_RADIUS } = GAME_CONFIG.COMBAT;
-    const spawnX = this.playerX + Math.cos(this.aimAngle) * 26;
-    const spawnY = this.playerY + Math.sin(this.aimAngle) * 26;
+    const spawnX = this.playerX + Math.cos(angle) * 26;
+    const spawnY = this.playerY + Math.sin(angle) * 26;
 
     const container = this.add.container(spawnX, spawnY).setDepth(25);
     const halo = this.add
@@ -550,9 +573,10 @@ export class GameScene extends Phaser.Scene {
       container,
       x: spawnX,
       y: spawnY,
-      vx: Math.cos(this.aimAngle) * PROJECTILE_SPEED,
-      vy: Math.sin(this.aimAngle) * PROJECTILE_SPEED,
+      vx: Math.cos(angle) * PROJECTILE_SPEED,
+      vy: Math.sin(angle) * PROJECTILE_SPEED,
       life: PROJECTILE_LIFE,
+      pierce: this.boons.has('PIERCE') ? 1 : 0,
     });
   }
 
@@ -762,8 +786,37 @@ export class GameScene extends Phaser.Scene {
     // Короткая передышка между волнами.
     this.hp = Math.min(this.maxHp, this.hp + 1);
     this.mana = Math.min(GAME_CONFIG.COMBAT.MAX_MANA, this.mana + 25);
+
+    // Конец этажа: вместо таймера показываем выбор дара.
+    if (isFloorEnd(this.waveIndex)) {
+      this.showGiftChoice();
+      return;
+    }
+
     this.waveTransitionTimer = 2.5;
     showFloatingText(this, this.playerX, this.playerY - 34, 'Волна пройдена', '#fbbf24');
+  }
+
+  /** Выбор дара после этажа: игра замирает до клика по карточке. */
+  private showGiftChoice(): void {
+    this.gameState = 'GIFT';
+    showBoonChoice(this, this.uiOverlay, pickBoonChoices(this.boons), (key) =>
+      this.takeBoon(key)
+    );
+  }
+
+  private takeBoon(key: BoonKey): void {
+    this.boons.add(key);
+
+    // Стойкость повышает запас сразу, остальные дары читаются в бою.
+    if (key === 'VITALITY') {
+      this.maxHp += 1;
+      this.hp = Math.min(this.maxHp, this.hp + 1);
+    }
+
+    this.uiOverlay.removeAll(true);
+    this.gameState = 'PLAYING';
+    this.beginWave(this.waveIndex + 1);
   }
 
   private spawnEnemy(type: EnemyTypeKey): void {
@@ -882,8 +935,16 @@ export class GameScene extends Phaser.Scene {
         const hitDist = e.config.radius + GAME_CONFIG.COMBAT.PROJECTILE_RADIUS;
 
         if (Phaser.Math.Distance.Between(e.x, e.y, p.x, p.y) <= hitDist) {
-          p.container.destroy();
-          this.projectiles.splice(j, 1);
+          if (p.hitEnemies?.includes(e)) continue;
+
+          if (p.pierce > 0) {
+            // «Пронзающая искра»: снаряд остаётся и летит дальше.
+            p.pierce -= 1;
+            (p.hitEnemies ??= []).push(e);
+          } else {
+            p.container.destroy();
+            this.projectiles.splice(j, 1);
+          }
 
           e.hp -= GAME_CONFIG.COMBAT.PROJECTILE_DAMAGE;
           this.shotsHit++;
@@ -1331,6 +1392,7 @@ export class GameScene extends Phaser.Scene {
       xpToNext: this.xpToNext,
       wave: this.waveIndex + 1,
       wavesTotal: WAVES.length,
+      floorLabel: `ЭТАЖ ${FLOOR_ROMAN[getFloorIndex(this.waveIndex)] ?? 'III'}`,
       waveName: wave?.name ?? '',
       enemiesLeft: pendingSpawns + this.enemies.length,
       addsLeft: wave?.boss ? addsAlive : null,
@@ -1448,6 +1510,7 @@ export class GameScene extends Phaser.Scene {
     this.waveActive = false;
     this.guaranteedQueue = [];
     this.bossAddsTimer = 0;
+    this.boons.clear();
 
     this.uiOverlay.removeAll(true);
     this.hud.container.setVisible(true);

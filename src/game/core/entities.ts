@@ -43,6 +43,10 @@ export interface ProjectileEntity {
   vx: number;
   vy: number;
   life: number;
+  /** Сколько ещё врагов снаряд пробьёт, прежде чем исчезнуть. */
+  pierce: number;
+  /** Враги, которые уже пропустили снаряд сквозь себя. */
+  hitEnemies?: EnemyEntity[];
 }
 
 export interface EnemyProjectileEntity {

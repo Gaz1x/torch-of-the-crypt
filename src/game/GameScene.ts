@@ -3,7 +3,6 @@ import soundtrackUrl from '../assets/audio/soundtrack.mp3';
 import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameConfig';
 import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
 import { WAVES, getFloorIndex, isFloorEnd, type WaveConfig } from './core/waves';
-import { xpToNextLevel } from './core/progression';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
 import { pickBoonChoices, type BoonKey } from './core/boons';
 import {
@@ -105,6 +104,9 @@ export class GameScene extends Phaser.Scene {
 
   // Система Света и Тьмы
   private darknessOverlay!: Phaser.GameObjects.RenderTexture;
+  /** Контур по границе света: мягкое широкое кольцо и тонкое яркое. */
+  private lightRingSoft!: Phaser.GameObjects.Arc;
+  private lightRingBright!: Phaser.GameObjects.Arc;
   /** Кисти-источники для вырезания света: у каждой свой размер на кадр. */
   private lightBrush!: Phaser.GameObjects.Image;
   private smallLightBrush!: Phaser.GameObjects.Image;
@@ -152,11 +154,8 @@ export class GameScene extends Phaser.Scene {
   private shotsHit = 0;
   private manaCollected = 0;
   private bossesKilled = 0;
-
-  // Опыт и уровень
-  private level = 1;
-  private xp = 0;
-  private xpToNext = xpToNextLevel(1);
+  /** Защита от повторного запуска, пока меню плавно гаснет. */
+  private startingRun = false;
 
   // Клавиши
   private keys!: {
@@ -387,6 +386,19 @@ export class GameScene extends Phaser.Scene {
     this.lightBrush = this.createLightBrush();
     this.smallLightBrush = this.createLightBrush().setDisplaySize(140, 140);
     this.torchLightBrush = this.createLightBrush().setDisplaySize(210, 210);
+
+    // Кольца света лежат поверх тьмы (глубина 20), но под HUD.
+    const ringColor = PHASES[this.currentPhase].ringColor;
+    this.lightRingSoft = this.add
+      .circle(this.playerX, this.playerY, this.currentLightRadius, ringColor, 0)
+      .setStrokeStyle(7, ringColor, 1)
+      .setDepth(20.5)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.lightRingBright = this.add
+      .circle(this.playerX, this.playerY, this.currentLightRadius, ringColor, 0)
+      .setStrokeStyle(1.5, ringColor, 1)
+      .setDepth(20.6)
+      .setBlendMode(Phaser.BlendModes.ADD);
   }
 
   /** Кисть с прозрачным краем: одна текстура, отдельный объект на каждый размер. */
@@ -429,6 +441,22 @@ export class GameScene extends Phaser.Scene {
     for (const torch of this.torchLights) {
       this.darknessOverlay.erase(this.torchLightBrush, torch.x, torch.y);
     }
+
+    this.updateLightRings(radius, time);
+  }
+
+  /** Двойной контур по границе света: радиус видно даже на тёмном фоне. */
+  private updateLightRings(radius: number, time: number): void {
+    const pulse = 1 + Math.sin(time * 0.004) * 0.05;
+
+    this.lightRingSoft
+      .setPosition(this.playerX, this.playerY)
+      .setRadius((radius + 4) * pulse)
+      .setAlpha(0.16);
+    this.lightRingBright
+      .setPosition(this.playerX, this.playerY)
+      .setRadius(radius * pulse)
+      .setAlpha(0.55);
   }
 
   private updateTorchDrain(dt: number): void {
@@ -921,6 +949,10 @@ export class GameScene extends Phaser.Scene {
 
       if (removed) {
         e.container.destroy();
+        // Полоски здоровья живут отдельно от контейнера врага,
+        // поэтому их нужно убирать и при взрыве, и при обычной смерти.
+        e.hpBar?.destroy();
+        e.hpBarBack?.destroy();
         this.enemies.splice(i, 1);
         if (this.gameState !== 'PLAYING') return;
         continue;
@@ -1270,7 +1302,6 @@ export class GameScene extends Phaser.Scene {
       this.spawnManaOrb(e.x, e.y, e.config.manaDrop);
       this.score += e.config.scoreValue;
       this.killsCount++;
-      this.gainXp(e.config.xp);
       if (e.isBoss) {
         this.bossesKilled++;
       }
@@ -1333,35 +1364,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ============================================================================
-  // 6. ОПЫТ И УРОВЕНЬ
-  // ============================================================================
-
-  private gainXp(amount: number): void {
-    this.xp += amount;
-
-    while (this.xp >= this.xpToNext) {
-      this.xp -= this.xpToNext;
-      this.level++;
-      this.xpToNext = xpToNextLevel(this.level);
-      this.onLevelUp();
-    }
-  }
-
-  private onLevelUp(): void {
-    showFloatingText(this, this.playerX, this.playerY - 42, `УРОВЕНЬ ${this.level}`, '#fbbf24');
-    this.cameras.main.flash(160, 251, 191, 36);
-
-    this.hud.levelText.setScale(1.25);
-    this.tweens.add({
-      targets: this.hud.levelText,
-      scale: 1,
-      duration: 260,
-    });
-
-    // Здесь позже появится выбор улучшения при повышении уровня.
-  }
-
-  // ============================================================================
   // 7. HUD И ЭКРАНЫ
   // ============================================================================
 
@@ -1387,12 +1389,9 @@ export class GameScene extends Phaser.Scene {
       killsCount: this.killsCount,
       survivalTime: this.survivalTime,
       slowedEnemies: this.enemies.filter((e) => e.inLight).length,
-      level: this.level,
-      xp: this.xp,
-      xpToNext: this.xpToNext,
       wave: this.waveIndex + 1,
       wavesTotal: WAVES.length,
-      floorLabel: `ЭТАЖ ${FLOOR_ROMAN[getFloorIndex(this.waveIndex)] ?? 'III'}`,
+      floor: FLOOR_ROMAN[getFloorIndex(this.waveIndex)] ?? 'III',
       waveName: wave?.name ?? '',
       enemiesLeft: pendingSpawns + this.enemies.length,
       addsLeft: wave?.boss ? addsAlive : null,
@@ -1464,6 +1463,11 @@ export class GameScene extends Phaser.Scene {
     this.player.setAlpha(1);
     this.invulnRing.setVisible(false);
 
+    // В лагере факел всегда горит ровно — кольцо света янтарное.
+    this.currentPhase = getPhase(0);
+    this.torchDrainTimer = 0;
+    this.applyCurrentPhase();
+
     drawStartScreen(
       this,
       this.uiOverlay,
@@ -1471,9 +1475,37 @@ export class GameScene extends Phaser.Scene {
       () => this.startGame(),
       this.getSettingsController()
     );
+
+    // Меню проявляется мягко, а не появляется одним кадром.
+    this.uiOverlay.setAlpha(0);
+    this.tweens.add({
+      targets: this.uiOverlay,
+      alpha: 1,
+      duration: 420,
+      ease: 'Quad.easeOut',
+    });
   }
 
+  /** Плавно гасит меню и только потом начинает новый спуск. */
   private startGame(): void {
+    if (this.startingRun) return;
+    this.startingRun = true;
+
+    this.tweens.add({
+      targets: this.uiOverlay,
+      alpha: 0,
+      duration: 340,
+      ease: 'Quad.easeIn',
+      onComplete: () => {
+        this.startingRun = false;
+        this.uiOverlay.setAlpha(1);
+        this.beginRun();
+      },
+    });
+  }
+
+  /** Сбрасывает партию и запускает первую волну. */
+  private beginRun(): void {
     this.clearField();
     this.resetPlayerPosition();
     this.applyProfileBonuses();
@@ -1499,10 +1531,6 @@ export class GameScene extends Phaser.Scene {
     this.fireCooldown = 0;
     this.bossesKilled = 0;
 
-    this.level = 1;
-    this.xp = 0;
-    this.xpToNext = xpToNextLevel(1);
-
     this.waveIndex = 0;
     this.waveSpawned = 0;
     this.waveSpawnTimer = 0;
@@ -1513,10 +1541,18 @@ export class GameScene extends Phaser.Scene {
     this.boons.clear();
 
     this.uiOverlay.removeAll(true);
-    this.hud.container.setVisible(true);
+    this.hud.container.setVisible(true).setAlpha(0);
     hideBossBar(this.hud);
     this.updateHUD(0);
     this.gameState = 'PLAYING';
+
+    // HUD проявляется вместе с уходом меню.
+    this.tweens.add({
+      targets: this.hud.container,
+      alpha: 1,
+      duration: 420,
+      ease: 'Quad.easeOut',
+    });
 
     this.beginWave(0);
   }
@@ -1534,7 +1570,7 @@ export class GameScene extends Phaser.Scene {
       accuracy,
       wave: this.waveIndex + 1,
       wavesTotal: WAVES.length,
-      level: this.level,
+      floor: getFloorIndex(this.waveIndex) + 1,
       bossesKilled: this.bossesKilled,
       hp: this.hp,
       maxHp: this.maxHp,
@@ -1672,6 +1708,10 @@ export class GameScene extends Phaser.Scene {
     const radius = this.torchDrainTimer > 0
       ? Math.min(baseRadius, BOSS_CONFIG.FLAME_EATER.drainRadius)
       : baseRadius;
+
+    const ringColor = PHASES[this.currentPhase].ringColor;
+    this.lightRingSoft.setStrokeStyle(7, ringColor, 1);
+    this.lightRingBright.setStrokeStyle(1.5, ringColor, 1);
 
     this.setLightRadius(radius);
   }

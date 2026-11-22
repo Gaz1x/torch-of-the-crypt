@@ -26,9 +26,9 @@ export const UI_COLORS = {
 
 export const UI_FONT = {
   /** Заголовки: системный serif, чтобы не тянуть шрифты из сети. */
-  display: 'Georgia, "Palatino Linotype", "Book Antiqua", serif',
-  /** Интерфейс и цифры. */
-  body: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+  display: '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif',
+  /** Интерфейс и описания. */
+  body: '"Segoe UI", "Trebuchet MS", system-ui, sans-serif',
 } as const;
 
 export const UI_DEPTH = {

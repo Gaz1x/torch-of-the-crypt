@@ -37,13 +37,10 @@ export interface HudStats {
   killsCount: number;
   survivalTime: number;
   slowedEnemies: number;
-  level: number;
-  xp: number;
-  xpToNext: number;
   wave: number;
   wavesTotal: number;
-  /** «ЭТАЖ I» — показывается в строке волны. */
-  floorLabel: string;
+  /** Римский номер этажа: I, II или III. */
+  floor: string;
   waveName: string;
   enemiesLeft: number;
   /** Для боссовой волны — число живых мобов свиты (без самого босса). */
@@ -59,13 +56,12 @@ export interface HudStats {
 
 export interface HudParts {
   container: Phaser.GameObjects.Container;
-  levelText: Phaser.GameObjects.Text;
+  /** Номер этажа в медальоне слева. */
+  floorText: Phaser.GameObjects.Text;
   hpSegments: Phaser.GameObjects.Rectangle[];
   hpFlash: Phaser.GameObjects.Rectangle;
   manaBarFill: Phaser.GameObjects.Rectangle;
   manaValueText: Phaser.GameObjects.Text;
-  xpBarFill: Phaser.GameObjects.Rectangle;
-  xpValueText: Phaser.GameObjects.Text;
   scoreValueText: Phaser.GameObjects.Text;
   timeValueText: Phaser.GameObjects.Text;
   killsValueText: Phaser.GameObjects.Text;
@@ -97,9 +93,9 @@ const PHASE_PANEL = { x: 520, y: 14, width: 240, height: 84 };
 
 const HP_BAR = {
   x: 96,
-  y: 30,
+  y: 34,
   width: 260,
-  height: 16,
+  height: 24,
   gap: 4,
   /** Запасной максимум: базовые HP плюс все уровни «Крепкой стражи». */
   count: GAME_CONFIG.PLAYER.MAX_HP + UPGRADES.VITALITY.maxLevel,
@@ -107,18 +103,10 @@ const HP_BAR = {
 
 const MANA_BAR = {
   x: 96,
-  y: 66,
+  y: 86,
   width: 260,
   innerWidth: 256,
-  height: 12,
-};
-
-const XP_BAR = {
-  x: 96,
-  y: 98,
-  width: 260,
-  innerWidth: 256,
-  height: 7,
+  height: 18,
 };
 
 const BOSS_BAR = {
@@ -143,10 +131,10 @@ function createStatLabel(
 ): Phaser.GameObjects.Text {
   return scene.add.text(x, y, text, {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: '10px',
     fontStyle: 'bold',
     color: '#7c8ba1',
-    letterSpacing: 1.5,
+    letterSpacing: 2,
   });
 }
 
@@ -167,7 +155,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
   const levelMedallion = createMedallion(scene, 48, 66, 30, UI_COLORS.brassBright);
   leftPanel.add(levelMedallion);
 
-  const levelCaptionText = scene.add.text(48, 52, 'УР.', {
+  const floorCaptionText = scene.add.text(48, 52, 'ЭТАЖ', {
     fontFamily: UI_FONT.body,
     fontSize: '8px',
     fontStyle: 'bold',
@@ -175,16 +163,16 @@ export function createHud(scene: Phaser.Scene): HudParts {
     letterSpacing: 1,
   }).setOrigin(0.5);
 
-  const levelText = scene.add.text(48, 70, '1', {
+  const floorText = scene.add.text(48, 70, 'I', {
     fontFamily: UI_FONT.display,
-    fontSize: '26px',
+    fontSize: '24px',
     fontStyle: 'bold',
     color: '#f0c674',
   }).setOrigin(0.5);
 
-  leftPanel.add([levelCaptionText, levelText]);
+  leftPanel.add([floorCaptionText, floorText]);
 
-  const hpLabel = createStatLabel(scene, HP_BAR.x, 16, 'ЖИЗНЬ');
+  const hpLabel = createStatLabel(scene, HP_BAR.x, 18, 'ЖИЗНЬ');
   leftPanel.add(hpLabel);
 
   const hpSlots: Phaser.GameObjects.Rectangle[] = [];
@@ -218,8 +206,8 @@ export function createHud(scene: Phaser.Scene): HudParts {
     .setOrigin(0.5);
   leftPanel.add(hpFlash);
 
-  const manaLabel = createStatLabel(scene, MANA_BAR.x, 52, 'МАНА');
-  const manaValueText = scene.add.text(MANA_BAR.x + MANA_BAR.width, 52, '', {
+  const manaLabel = createStatLabel(scene, MANA_BAR.x, 70, 'МАНА');
+  const manaValueText = scene.add.text(MANA_BAR.x + MANA_BAR.width, 70, '', {
     fontFamily: UI_FONT.body,
     fontSize: '9px',
     fontStyle: 'bold',
@@ -253,39 +241,12 @@ export function createHud(scene: Phaser.Scene): HudParts {
     manaTicks.lineBetween(tickX, MANA_BAR.y + 2, tickX, MANA_BAR.y + MANA_BAR.height - 2);
   }
 
-  const xpLabel = createStatLabel(scene, XP_BAR.x, 84, 'ОПЫТ');
-  const xpValueText = scene.add.text(XP_BAR.x + XP_BAR.width, 84, '', {
-    fontFamily: UI_FONT.body,
-    fontSize: '9px',
-    fontStyle: 'bold',
-    color: '#fde68a',
-  }).setOrigin(1, 0);
-
-  const xpBarBg = scene.add
-    .rectangle(XP_BAR.x, XP_BAR.y, XP_BAR.width, XP_BAR.height, 0x0c1422, 1)
-    .setOrigin(0, 0)
-    .setStrokeStyle(1, 0x334155, 0.9);
-
-  const xpBarFill = scene.add
-    .rectangle(
-      XP_BAR.x + 2,
-      XP_BAR.y + 2,
-      XP_BAR.innerWidth,
-      XP_BAR.height - 4,
-      UI_COLORS.emberBright
-    )
-    .setOrigin(0, 0);
-
   leftPanel.add([
     manaLabel,
     manaValueText,
     manaBarBg,
     manaBarFill,
     manaTicks,
-    xpLabel,
-    xpValueText,
-    xpBarBg,
-    xpBarFill,
   ]);
 
   // --------------------------------------------------------------- ХРОНИКА
@@ -479,13 +440,11 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   return {
     container,
-    levelText,
+    floorText,
     hpSegments: hpSlots,
     hpFlash,
     manaBarFill,
     manaValueText,
-    xpBarFill,
-    xpValueText,
     scoreValueText,
     timeValueText,
     killsValueText,
@@ -551,16 +510,13 @@ export function updateHud(parts: HudParts, stats: HudStats): void {
     `${Math.floor(stats.mana)} / ${GAME_CONFIG.COMBAT.MAX_MANA}`
   );
 
-  // --- Опыт ---
-  const xpRatio = Phaser.Math.Clamp(stats.xp / stats.xpToNext, 0, 1);
-  parts.xpBarFill.scaleX = xpRatio;
-  setTextIfChanged(parts.xpValueText, `${Math.floor(stats.xp)} / ${stats.xpToNext}`);
-  setTextIfChanged(parts.levelText, `${stats.level}`);
+  // --- Этаж ---
+  setTextIfChanged(parts.floorText, stats.floor);
 
   // --- Волна ---
   setTextIfChanged(
     parts.waveText,
-    `${stats.floorLabel} · ВОЛНА ${stats.wave} / ${stats.wavesTotal}`
+    `ЭТАЖ ${stats.floor} · ВОЛНА ${stats.wave} / ${stats.wavesTotal}`
   );
   setTextIfChanged(parts.waveNameText, stats.waveName);
   setTextIfChanged(parts.waveMedallionText, `${stats.wave}`);

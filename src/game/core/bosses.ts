@@ -41,7 +41,6 @@ export const BOSS_CONFIG: Record<BossTypeKey, BossConfig> = {
     eyeColor: 0xf97316,
     scoreValue: 60,
     manaDrop: 70,
-    xp: 40,
     contactDamage: 1,
     chargeSpeed: 520,
     chargeDamage: 2,

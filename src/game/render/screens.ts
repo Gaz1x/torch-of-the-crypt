@@ -32,6 +32,13 @@ import {
 // остаются в GameScene — здесь только отрисовка.
 // ============================================================================
 
+const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
+
+/** «II / III» — этап, на котором закончился спуск. */
+function formatFloor(floor: number): string {
+  return `${FLOOR_ROMAN[floor - 1] ?? 'I'} / ${FLOOR_ROMAN[FLOOR_ROMAN.length - 1]}`;
+}
+
 /** Статистика, показываемая на экране победы или поражения. */
 export interface GameOverStats {
   score: number;
@@ -41,7 +48,8 @@ export interface GameOverStats {
   accuracy: number;
   wave: number;
   wavesTotal: number;
-  level: number;
+  /** Номер этажа, на котором закончился спуск (1–3). */
+  floor: number;
   bossesKilled: number;
   hp: number;
   maxHp: number;
@@ -71,31 +79,42 @@ function createScreenBase(
   accent: number
 ): Phaser.GameObjects.Container {
   const screen = scene.add.container(0, 0);
+  const backdrop = scene.add.container(0, 0);
   const { width, height } = scene.scale;
 
   const dim = scene.add.rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.72);
   const vignette = createVignette(scene, width, height, UI_COLORS.void, 0.85);
   const glow = scene.add.circle(width / 2, height / 2, 300, accent, 0.05);
 
-  screen.add([dim, vignette, glow]);
-  spawnEmbers(scene, screen, width, height, 26);
+  backdrop.add([dim, vignette, glow]);
+  spawnEmbers(scene, backdrop, width, height, 26);
 
+  // Фон проявляется мягко, а карточка поверх него выезжает отдельно.
+  backdrop.setAlpha(0);
+  scene.tweens.add({
+    targets: backdrop,
+    alpha: 1,
+    duration: 320,
+    ease: 'Quad.easeOut',
+  });
+
+  screen.add(backdrop);
   overlay.add(screen);
   return screen;
 }
 
 function animateCardIn(scene: Phaser.Scene, card: Phaser.GameObjects.Container): void {
   const targetY = card.y;
-  card.setY(targetY + 14);
+  card.setY(targetY + 18);
   card.setAlpha(0);
-  card.setScale(0.96);
+  card.setScale(0.95);
 
   scene.tweens.add({
     targets: card,
     y: targetY,
     alpha: 1,
     scale: 1,
-    duration: 280,
+    duration: 320,
     ease: 'Cubic.easeOut',
   });
 }
@@ -115,8 +134,8 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const backdrop = scene.add.rectangle(
     0,
     0,
-    scene.scale.width,
-    scene.scale.height,
+    scene.scale.width * 1.1,
+    scene.scale.height * 1.1,
     UI_COLORS.void,
     0.6
   ).setInteractive();
@@ -138,7 +157,7 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const headers = (x: number, y: number, text: string): Phaser.GameObjects.Text =>
     scene.add.text(x, y, text, {
       fontFamily: UI_FONT.body,
-      fontSize: '10px',
+      fontSize: '11px',
       fontStyle: 'bold',
       color: '#7dd3fc',
       letterSpacing: 2,
@@ -147,10 +166,10 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const body = (x: number, y: number, text: string): Phaser.GameObjects.Text =>
     scene.add.text(x, y, text, {
       fontFamily: UI_FONT.body,
-      fontSize: '13px',
+      fontSize: '14px',
       color: '#c3cedd',
-      lineSpacing: 6,
-      wordWrap: { width: 300 },
+      lineSpacing: 7,
+      wordWrap: { width: 320 },
     });
 
   const leftX = -340;
@@ -182,8 +201,8 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const leftRunBody = body(
     leftX,
     46,
-    'Пять волн, в конце — босс\n' +
-      'У каждого босса свои приёмы\n' +
+    'Три этажа по три волны, в конце — босс\n' +
+      'После каждого этажа — выбор дара\n' +
       'Между волнами: +1 HP и +25 маны'
   );
 
@@ -222,7 +241,14 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const open = (): void => {
     modal.setVisible(true);
     modal.setAlpha(0);
-    scene.tweens.add({ targets: modal, alpha: 1, duration: 160 });
+    modal.setScale(0.96);
+    scene.tweens.add({
+      targets: modal,
+      alpha: 1,
+      scale: 1,
+      duration: 240,
+      ease: 'Cubic.easeOut',
+    });
   };
 
   const close = (): void => {
@@ -394,7 +420,12 @@ function createSettingsModal(
     refreshMute();
     modal.setVisible(true);
     modal.setAlpha(0);
-    scene.tweens.add({ targets: modal, alpha: 1, duration: 160 });
+    scene.tweens.add({
+      targets: modal,
+      alpha: 1,
+      duration: 220,
+      ease: 'Quad.easeOut',
+    });
   };
 
   function close(): void {
@@ -419,6 +450,8 @@ interface UpgradesModal {
 
 interface UpgradeCardRef {
   key: UpgradeKey;
+  container: Phaser.GameObjects.Container;
+  baseY: number;
   levelText: Phaser.GameObjects.Text;
   buyButton: ReturnType<typeof createButton>;
 }
@@ -470,11 +503,11 @@ function createUpgradesModal(
     const y = 158 + index * 136;
     const iconKind = key === 'VITALITY' ? 'banner' : key === 'MANA_RESERVE' ? 'crystal' : 'flame';
 
-    const cardContainer = scene.add.container(0, 0);
-    const cardPanel = createPanel(scene, 220, y, 840, 120, 0x4b5d77);
-    const icon = createIcon(scene, 268, y + 60, iconKind, 32, UI_COLORS.emberBright);
+    const cardContainer = scene.add.container(0, y);
+    const cardPanel = createPanel(scene, 220, 0, 840, 120, 0x4b5d77);
+    const icon = createIcon(scene, 268, 60, iconKind, 32, UI_COLORS.emberBright);
 
-    const name = scene.add.text(300, y + 14, definition.name, {
+    const name = scene.add.text(300, 14, definition.name, {
       fontFamily: UI_FONT.display,
       fontSize: '18px',
       fontStyle: 'bold',
@@ -482,22 +515,22 @@ function createUpgradesModal(
       letterSpacing: 1,
     });
 
-    const description = scene.add.text(300, y + 42, definition.description, {
+    const description = scene.add.text(300, 42, definition.description, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       color: '#c3cedd',
-      lineSpacing: 3,
+      lineSpacing: 4,
       wordWrap: { width: 400 },
     });
 
-    const effect = scene.add.text(300, y + 88, definition.effect, {
+    const effect = scene.add.text(300, 88, definition.effect, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       fontStyle: 'bold',
       color: '#7dd3fc',
     });
 
-    const levelText = scene.add.text(1040, y + 16, '', {
+    const levelText = scene.add.text(1040, 16, '', {
       fontFamily: UI_FONT.body,
       fontSize: '11px',
       fontStyle: 'bold',
@@ -505,7 +538,7 @@ function createUpgradesModal(
       letterSpacing: 1,
     }).setOrigin(1, 0);
 
-    const buyButton = createButton(scene, 960, y + 72, 180, 40, '', {
+    const buyButton = createButton(scene, 960, 72, 180, 40, '', {
       variant: 'primary',
       accent: UI_COLORS.ember,
       accentHex: '#1a1205',
@@ -524,7 +557,7 @@ function createUpgradesModal(
     ]);
     modal.add(cardContainer);
 
-    return { key, levelText, buyButton };
+    return { key, container: cardContainer, baseY: y, levelText, buyButton };
   });
 
   const refresh = (): void => {
@@ -587,7 +620,27 @@ function createUpgradesModal(
     refresh();
     modal.setVisible(true);
     modal.setAlpha(0);
-    scene.tweens.add({ targets: modal, alpha: 1, duration: 160 });
+    scene.tweens.add({
+      targets: modal,
+      alpha: 1,
+      duration: 220,
+      ease: 'Quad.easeOut',
+    });
+
+    // Карточки поднимаются по очереди, чтобы окно «раскрывалось».
+    cards.forEach((card, index) => {
+      scene.tweens.killTweensOf(card.container);
+      card.container.setAlpha(0);
+      card.container.y = card.baseY + 14;
+      scene.tweens.add({
+        targets: card.container,
+        y: card.baseY,
+        alpha: 1,
+        delay: 80 + index * 60,
+        duration: 280,
+        ease: 'Cubic.easeOut',
+      });
+    });
   };
 
   function close(): void {
@@ -605,6 +658,16 @@ function createUpgradesModal(
 // ============================================================================
 // ХАБ / СТАРТОВЫЙ ЭКРАН
 // ============================================================================
+
+/** Слоганы под лором: сменяются, пока игрок стоит в лагере. */
+const START_SLOGANS = [
+  'Тьма не спешит. Спешит пламя.',
+  'Каждый спуск оставляет имя — или пепел.',
+  'Факел гаснет быстрее, чем храбрость.',
+  'Внизу нет героев. Только те, кто ещё идёт.',
+  'Свет — не спасение. Свет — отсрочка.',
+  'Крипта помнит всех. Некоторые имена ещё горят.',
+];
 
 export function drawStartScreen(
   scene: Phaser.Scene,
@@ -625,7 +688,7 @@ export function drawStartScreen(
 
   const subtitle = scene.add.text(150, 56, 'ХРОНИКИ ПОДЗЕМЕЛЬЯ', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: '11px',
     fontStyle: 'bold',
     color: '#a8844c',
     letterSpacing: 4,
@@ -650,22 +713,59 @@ export function drawStartScreen(
   const lore = scene.add.text(
     70,
     184,
-    'Крипта ждёт новых имён. Спуститесь в темноту,\n' +
-      'соберите Эхо павших и вернитесь в лагерь сильнее.',
+    'Крипта не хоронит мёртвых — она их запоминает.\n' +
+      'Спуститесь в темноту, отнимите у неё Эхо павших\n' +
+      'и вернитесь, пока факел ещё горит.',
     {
       fontFamily: UI_FONT.body,
-      fontSize: '13px',
+      fontSize: '14px',
       color: '#c3cedd',
-      lineSpacing: 6,
-      wordWrap: { width: 430 },
+      lineSpacing: 7,
+      wordWrap: { width: 460 },
     }
   );
+
+  // Слоган меняется сам, пока игрок выбирает, куда идти.
+  let sloganIndex = 0;
+  const sloganText = scene.add.text(70, 266, `— ${START_SLOGANS[0]}`, {
+    fontFamily: UI_FONT.body,
+    fontSize: '13px',
+    fontStyle: 'italic',
+    color: '#8fa3ba',
+    lineSpacing: 4,
+    wordWrap: { width: 460 },
+  });
+
+  const sloganTimer = scene.time.addEvent({
+    delay: 7000,
+    loop: true,
+    callback: () => {
+      if (!sloganText.active) return;
+      scene.tweens.add({
+        targets: sloganText,
+        alpha: 0,
+        duration: 340,
+        ease: 'Quad.easeIn',
+        onComplete: () => {
+          sloganIndex = (sloganIndex + 1) % START_SLOGANS.length;
+          sloganText.setText(`— ${START_SLOGANS[sloganIndex]}`);
+          scene.tweens.add({
+            targets: sloganText,
+            alpha: 1,
+            duration: 420,
+            ease: 'Quad.easeOut',
+          });
+        },
+      });
+    },
+  });
+  screen.once('destroy', () => sloganTimer.remove());
 
   // ------------------------------------------------------- КНОПКИ СПРАВА
   const menuX = 1000;
   const menuTitle = scene.add.text(menuX, 196, 'ЛАГЕРЬ СТРАЖА', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: '11px',
     fontStyle: 'bold',
     color: '#a8844c',
     letterSpacing: 4,
@@ -708,7 +808,7 @@ export function drawStartScreen(
 
   const statsHeader = scene.add.text(1000, 516, 'ХРОНИКА СТРАЖА', {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: '10px',
     fontStyle: 'bold',
     color: '#7c8ba1',
     letterSpacing: 2,
@@ -720,7 +820,7 @@ export function drawStartScreen(
 
   const echoLabel = scene.add.text(904, 544, 'ЭХО', {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: '10px',
     fontStyle: 'bold',
     color: '#7c8ba1',
     letterSpacing: 2,
@@ -742,7 +842,7 @@ export function drawStartScreen(
   }).setOrigin(0.5);
   const rankLabel = scene.add.text(1106, 588, 'РАНГ', {
     fontFamily: UI_FONT.body,
-    fontSize: '8px',
+    fontSize: '9px',
     fontStyle: 'bold',
     color: '#7c8ba1',
     letterSpacing: 2,
@@ -772,6 +872,7 @@ export function drawStartScreen(
     titleLine2,
     logoDivider,
     lore,
+    sloganText,
     menuTitle,
     startButton.container,
     upgradesButton.container,
@@ -891,7 +992,7 @@ function drawResultScreen(
 
   const badge = scene.add.text(0, -270, options.badge, {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: '11px',
     fontStyle: 'bold',
     color: options.accentHex,
     letterSpacing: 5,
@@ -911,7 +1012,7 @@ function drawResultScreen(
 
   const rankTitle = scene.add.text(0, -36, rank.title, {
     fontFamily: UI_FONT.body,
-    fontSize: '11px',
+    fontSize: '12px',
     fontStyle: 'bold',
     color: options.accentHex,
     letterSpacing: 3,
@@ -923,7 +1024,7 @@ function drawResultScreen(
     ['ВРЕМЯ', `${stats.survivalTime.toFixed(1)} сек`],
     ['ТОЧНОСТЬ', `${stats.accuracy}%`],
     ['ВОЛНА', `${stats.wave} / ${stats.wavesTotal}`],
-    ['УРОВЕНЬ', `${stats.level}`],
+    ['ЭТАЖ', formatFloor(stats.floor)],
   ];
 
   statCells.forEach(([label, value], index) => {
@@ -935,7 +1036,7 @@ function drawResultScreen(
     const cell = scene.add.container(x, y);
     const labelText = scene.add.text(0, -12, label, {
       fontFamily: UI_FONT.body,
-      fontSize: '9px',
+      fontSize: '10px',
       fontStyle: 'bold',
       color: '#7c8ba1',
       letterSpacing: 2,
@@ -970,8 +1071,8 @@ function drawResultScreen(
     `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled}`,
     {
       fontFamily: UI_FONT.body,
-      fontSize: '10px',
-      color: '#7c8ba1',
+      fontSize: '11px',
+      color: '#8b9bb0',
       letterSpacing: 1,
     }
   ).setOrigin(0.5);
@@ -982,7 +1083,7 @@ function drawResultScreen(
     `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
     {
       fontFamily: UI_FONT.body,
-      fontSize: '12px',
+      fontSize: '13px',
       fontStyle: 'bold',
       color: '#f0c674',
       letterSpacing: 2,
@@ -1078,7 +1179,7 @@ export function drawPauseScreen(
 
   const badge = scene.add.text(0, -230, 'ИГРА ОСТАНОВЛЕНА', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: '11px',
     fontStyle: 'bold',
     color: '#a8844c',
     letterSpacing: 5,
@@ -1096,7 +1197,7 @@ export function drawPauseScreen(
   const pauseStats: [string, string][] = [
     ['ВОЛНА', `${stats.wave} / ${stats.wavesTotal}`],
     ['ОЧКИ', `${stats.score}`],
-    ['УРОВЕНЬ', `${stats.level}`],
+    ['ЭТАЖ', formatFloor(stats.floor)],
     ['УБИТО', `${stats.killsCount}`],
     ['ВРЕМЯ', `${stats.survivalTime.toFixed(1)} сек`],
     ['ЗДОРОВЬЕ', `${stats.hp} / ${stats.maxHp}`],
@@ -1111,7 +1212,7 @@ export function drawPauseScreen(
     const cell = scene.add.container(x, y);
     const labelText = scene.add.text(0, -13, label, {
       fontFamily: UI_FONT.body,
-      fontSize: '9px',
+      fontSize: '10px',
       fontStyle: 'bold',
       color: '#7c8ba1',
       letterSpacing: 2,
@@ -1202,9 +1303,11 @@ export function showBoonChoice(
   const backdrop = scene.add
     .rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.78)
     .setInteractive();
+  backdrop.setAlpha(0);
   overlay.add(backdrop);
 
   const panel = createPanel(scene, 120, 86, 1040, 548, UI_COLORS.ember, { glow: true });
+  panel.setAlpha(0);
   overlay.add(panel);
 
   const title = scene.add.text(640, 132, 'ДАРЫ ЭТАЖА', {
@@ -1221,8 +1324,33 @@ export function showBoonChoice(
     color: '#a9b7c9',
   }).setOrigin(0.5);
 
-  overlay.add([title, subtitle]);
-  overlay.add(createDivider(scene, 640, 196, 520, UI_COLORS.ember));
+  const divider = createDivider(scene, 640, 196, 520, UI_COLORS.ember);
+  const note = scene.add.text(640, 600, 'Дар действует только в этом спуске', {
+    fontFamily: UI_FONT.body,
+    fontSize: '11px',
+    color: '#7c8ba1',
+  }).setOrigin(0.5);
+
+  const header = [title, subtitle, divider, note];
+  header.forEach((item) => item.setAlpha(0));
+  overlay.add(header);
+
+  // Подложка и заголовок проявляются раньше карточек.
+  scene.tweens.add({ targets: backdrop, alpha: 1, duration: 260, ease: 'Quad.easeOut' });
+  scene.tweens.add({
+    targets: panel,
+    alpha: 1,
+    delay: 50,
+    duration: 300,
+    ease: 'Quad.easeOut',
+  });
+  scene.tweens.add({
+    targets: header,
+    alpha: 1,
+    delay: 120,
+    duration: 300,
+    ease: 'Quad.easeOut',
+  });
 
   const cardWidth = 290;
   const gap = 30;
@@ -1233,11 +1361,19 @@ export function showBoonChoice(
     const x = startX + index * (cardWidth + gap);
     const y = 228;
 
-    const card = createPanel(scene, x, y, cardWidth, 300, UI_COLORS.brass);
-    overlay.add(card);
+    const cardContainer = scene.add.container(x, y);
+    overlay.add(cardContainer);
 
-    const icon = createIcon(scene, x + cardWidth / 2, y + 46, BOON_ICONS[choice.key], 28, UI_COLORS.emberBright);
-    const name = scene.add.text(x + cardWidth / 2, y + 86, choice.name, {
+    const card = createPanel(scene, 0, 0, cardWidth, 300, UI_COLORS.brass);
+    const icon = createIcon(
+      scene,
+      cardWidth / 2,
+      46,
+      BOON_ICONS[choice.key],
+      28,
+      UI_COLORS.emberBright
+    );
+    const name = scene.add.text(cardWidth / 2, 86, choice.name, {
       fontFamily: UI_FONT.display,
       fontSize: '17px',
       fontStyle: 'bold',
@@ -1246,17 +1382,17 @@ export function showBoonChoice(
       wordWrap: { width: cardWidth - 36 },
     }).setOrigin(0.5, 0);
 
-    const cardDivider = createDivider(scene, x + cardWidth / 2, y + 120, cardWidth - 60, UI_COLORS.brass);
+    const cardDivider = createDivider(scene, cardWidth / 2, 120, cardWidth - 60, UI_COLORS.brass);
 
-    const description = scene.add.text(x + 22, y + 140, choice.description, {
+    const description = scene.add.text(22, 140, choice.description, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       color: '#c3cedd',
-      lineSpacing: 3,
+      lineSpacing: 4,
       wordWrap: { width: cardWidth - 44 },
     });
 
-    const effect = scene.add.text(x + 22, y + 212, choice.effect, {
+    const effect = scene.add.text(22, 212, choice.effect, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       fontStyle: 'bold',
@@ -1264,7 +1400,7 @@ export function showBoonChoice(
       wordWrap: { width: cardWidth - 44 },
     });
 
-    const pickButton = createButton(scene, x + cardWidth / 2, y + 266, cardWidth - 70, 40, 'ВЗЯТЬ', {
+    const pickButton = createButton(scene, cardWidth / 2, 266, cardWidth - 70, 40, 'ВЗЯТЬ', {
       variant: 'primary',
       accent: UI_COLORS.ember,
       accentHex: '#1a1205',
@@ -1272,13 +1408,18 @@ export function showBoonChoice(
       fontSize: 13,
     });
 
-    overlay.add([icon, name, cardDivider, description, effect, pickButton.container]);
-  });
+    cardContainer.add([card, icon, name, cardDivider, description, effect, pickButton.container]);
 
-  const note = scene.add.text(640, 600, 'Дар действует только в этом спуске', {
-    fontFamily: UI_FONT.body,
-    fontSize: '11px',
-    color: '#7c8ba1',
-  }).setOrigin(0.5);
-  overlay.add(note);
+    // Карточки выезжают снизу по очереди — окно «раскрывается».
+    cardContainer.setAlpha(0);
+    cardContainer.y = y + 22;
+    scene.tweens.add({
+      targets: cardContainer,
+      y,
+      alpha: 1,
+      delay: 160 + index * 70,
+      duration: 320,
+      ease: 'Cubic.easeOut',
+    });
+  });
 }

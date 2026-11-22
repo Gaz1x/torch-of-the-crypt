@@ -29,6 +29,8 @@ export interface PhaseNotice {
 export interface PhaseDefinition {
   /** Радиус света факела в пикселях. */
   lightRadius: number;
+  /** Цвет контура по границе света. */
+  ringColor: number;
   /** Множитель скорости персонажа (1 — без замедления). */
   playerSpeedFactor: number;
   /** Что показать игроку при смене фазы. */
@@ -38,6 +40,7 @@ export interface PhaseDefinition {
 export const PHASES: Record<PhaseKey, PhaseDefinition> = {
   LIGHT: {
     lightRadius: 260,
+    ringColor: 0xfbbf24,
     playerSpeedFactor: 1,
     notice: {
       title: 'СВЕТ ВОЗВРАЩАЕТСЯ',
@@ -47,6 +50,7 @@ export const PHASES: Record<PhaseKey, PhaseDefinition> = {
   },
   DARK: {
     lightRadius: 90,
+    ringColor: 0xef4444,
     playerSpeedFactor: 0.85,
     notice: {
       title: 'ФАКЕЛ ГАСНЕТ',

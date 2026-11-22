@@ -20,7 +20,6 @@ export interface EnemyConfig {
   eyeColor: number;
   scoreValue: number;
   manaDrop: number;
-  xp: number;
   /** Дальность стрельбы (только для RANGED). */
   attackRange?: number;
   /** Пауза между выстрелами в секундах (только для RANGED). */
@@ -88,7 +87,6 @@ export const GAME_CONFIG = {
       eyeColor: 0xf43f5e,
       scoreValue: 1,
       manaDrop: 15,
-      xp: 1,
     },
     STALKER: {
       name: 'Сталкер',
@@ -103,7 +101,6 @@ export const GAME_CONFIG = {
       eyeColor: 0xef4444,
       scoreValue: 2,
       manaDrop: 22,
-      xp: 2,
     },
     BRUTE: {
       name: 'Теневой Брут',
@@ -118,7 +115,6 @@ export const GAME_CONFIG = {
       eyeColor: 0xf97316,
       scoreValue: 5,
       manaDrop: 40,
-      xp: 5,
     },
     SPITTER: {
       name: 'Плевун',
@@ -133,7 +129,6 @@ export const GAME_CONFIG = {
       eyeColor: 0xc084fc,
       scoreValue: 3,
       manaDrop: 18,
-      xp: 3,
       attackRange: 330,
       attackCooldown: 2.2,
       projectileSpeed: 240,
@@ -151,7 +146,6 @@ export const GAME_CONFIG = {
       eyeColor: 0xf97316,
       scoreValue: 2,
       manaDrop: 20,
-      xp: 3,
       explosionRadius: 120,
       explosionWindup: 0.85,
     },

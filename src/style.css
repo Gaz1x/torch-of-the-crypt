@@ -18,8 +18,22 @@ body,
   margin: 0;
 }
 
+/* На телефоне адресная строка меняет высоту — dvh учитывает её. */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #app {
+    height: 100dvh;
+  }
+}
+
 body {
   overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #app {
@@ -37,4 +51,53 @@ body {
 
 canvas {
   display: block;
+  touch-action: none;
+}
+
+/* --------------------------------------------------------------------------
+   ПОДСКАЗКА ОБ ОРИЕНТАЦИИ
+   Видна только на телефоне в вертикальном положении: игра рассчитана на
+   горизонтальный экран. На десктопе и в ландшафте не показывается.
+   -------------------------------------------------------------------------- */
+
+#rotate-hint {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 24px;
+  background: #0b1120;
+  color: #e8eef7;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.rotate-hint-icon {
+  font-size: 56px;
+  line-height: 1;
+  color: #f0c674;
+  animation: rotate-hint-tilt 2.4s ease-in-out infinite;
+}
+
+@keyframes rotate-hint-tilt {
+  0%,
+  60%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  80% {
+    transform: rotate(90deg);
+  }
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate-hint {
+    display: flex;
+  }
 }

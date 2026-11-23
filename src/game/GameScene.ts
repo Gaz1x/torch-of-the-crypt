@@ -56,6 +56,11 @@ import {
   type SettingsController,
 } from './render/screens';
 import {
+  createTouchControls,
+  TOUCH_CONFIG,
+  type TouchControls,
+} from './render/touchControls';
+import {
   createVignette,
   ensureGlowTexture,
   GLOW_TEXTURE_KEY,
@@ -171,6 +176,15 @@ export class GameScene extends Phaser.Scene {
     ESC: Phaser.Input.Keyboard.Key;
   };
 
+  // Touch-управление: левая половина — движение, правая — прицел и огонь.
+  private isTouchDevice = false;
+  private touchControls?: TouchControls;
+  private touchMovePointerId: number | null = null;
+  private touchAimPointerId: number | null = null;
+  private touchMoveOrigin = new Phaser.Math.Vector2();
+  private touchMove = new Phaser.Math.Vector2();
+  private touchAimAngle: number | null = null;
+
   // Элементы HUD и UI
   private hud!: HudParts;
   private uiOverlay!: Phaser.GameObjects.Container;
@@ -184,6 +198,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
+    // На телефоне включаем второй стик и кнопку паузы. Основной признак —
+    // грубый указатель; запасной вариант — поддержка touch в Phaser.
+    this.isTouchDevice =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(pointer: coarse)').matches
+        : this.sys.game.device.input.touch;
+
     const layout = drawCryptEnvironment(this);
     this.cracks = layout.cracks;
     this.torchLights = layout.torches;
@@ -216,7 +237,11 @@ export class GameScene extends Phaser.Scene {
 
     this.setupLightingSystem();
     this.setupInputs();
-    this.hud = createHud(this);
+    this.touchControls = createTouchControls(this);
+    this.hud = createHud(this, {
+      touch: this.isTouchDevice,
+      onPause: () => this.togglePause(),
+    });
     this.uiOverlay = this.add.container(0, 0).setDepth(40);
     this.lowHpVignette = createVignette(
       this,
@@ -324,7 +349,14 @@ export class GameScene extends Phaser.Scene {
   update(time: number, delta: number): void {
     const dt = delta / 1000;
 
+    if (this.touchControls) {
+      this.touchControls.setVisible(this.isTouchDevice && this.gameState === 'PLAYING');
+    }
+
     if (this.gameState !== 'PLAYING') {
+      if (this.touchMovePointerId !== null || this.touchAimPointerId !== null) {
+        this.resetTouchInput();
+      }
       // В меню рыцарь медленно поворачивается для красоты. На паузе,
       // на экране победы и на экране смерти он остаётся на месте.
       if (this.gameState === 'START') {
@@ -423,9 +455,7 @@ export class GameScene extends Phaser.Scene {
       GAME_CONFIG.LIGHT.DARKNESS_ALPHA
     );
 
-    const time = this.time.now;
-    const flicker = 1 + Math.sin(time * 0.006) * 0.025 + Math.sin(time * 0.017) * 0.015;
-    const radius = this.currentLightRadius * flicker;
+    const radius = this.currentLightRadius;
 
     this.lightBrush.setDisplaySize(radius * 2.3, radius * 2.3);
     this.darknessOverlay.erase(this.lightBrush, this.playerX, this.playerY);
@@ -442,20 +472,18 @@ export class GameScene extends Phaser.Scene {
       this.darknessOverlay.erase(this.torchLightBrush, torch.x, torch.y);
     }
 
-    this.updateLightRings(radius, time);
+    this.updateLightRings(radius);
   }
 
   /** Двойной контур по границе света: радиус видно даже на тёмном фоне. */
-  private updateLightRings(radius: number, time: number): void {
-    const pulse = 1 + Math.sin(time * 0.004) * 0.05;
-
+  private updateLightRings(radius: number): void {
     this.lightRingSoft
       .setPosition(this.playerX, this.playerY)
-      .setRadius((radius + 4) * pulse)
+      .setRadius(radius + 4)
       .setAlpha(0.16);
     this.lightRingBright
       .setPosition(this.playerX, this.playerY)
-      .setRadius(radius * pulse)
+      .setRadius(radius)
       .setAlpha(0.55);
   }
 
@@ -491,24 +519,128 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.gameState === 'PLAYING' && pointer.leftButtonDown()) {
+      if (this.gameState !== 'PLAYING') return;
+
+      // На телефоне касание — это стик или прицел, а не клик мышью.
+      if (this.isTouchDevice) {
+        this.beginTouch(pointer);
+        return;
+      }
+
+      if (pointer.leftButtonDown()) {
         this.tryFireProjectile();
       }
     });
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      this.updateTouchPointer(pointer);
+    });
+
+    this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+      this.endTouchPointer(pointer);
+    });
+
+    this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => {
+      this.endTouchPointer(pointer);
+    });
+
+    // При потере фокуса палец «залипает», поэтому сбрасываем стики.
+    this.game.events.on('blur', () => this.resetTouchInput());
+    this.game.events.on('hidden', () => this.resetTouchInput());
+  }
+
+  // ---------------------------------------------------------- TOUCH-ВВОД
+  // Левая половина экрана — движение, правая — прицел и огонь.
+  // Верхняя полоса HUD не участвует: там панели и кнопка паузы.
+
+  private beginTouch(pointer: Phaser.Input.Pointer): void {
+    if (pointer.y < TOUCH_CONFIG.HUD_SAFE_HEIGHT) return;
+
+    if (pointer.x < GAME_CONFIG.WORLD.WIDTH / 2) {
+      if (this.touchMovePointerId !== null) return;
+      this.touchMovePointerId = pointer.id;
+      this.touchMoveOrigin.set(pointer.x, pointer.y);
+      this.touchMove.set(0, 0);
+      this.touchControls?.showMove(pointer.x, pointer.y);
+      return;
+    }
+
+    if (this.touchAimPointerId !== null) return;
+    this.touchAimPointerId = pointer.id;
+    this.updateTouchAim(pointer);
+  }
+
+  private updateTouchPointer(pointer: Phaser.Input.Pointer): void {
+    if (pointer.id === this.touchMovePointerId) {
+      const dx = pointer.x - this.touchMoveOrigin.x;
+      const dy = pointer.y - this.touchMoveOrigin.y;
+      const distance = Math.hypot(dx, dy);
+      const limit = TOUCH_CONFIG.JOYSTICK_RADIUS;
+      const scale = distance > limit ? limit / distance : 1;
+
+      this.touchMove.set((dx / limit) * scale, (dy / limit) * scale);
+      this.touchControls?.updateMove(dx * scale, dy * scale);
+      return;
+    }
+
+    if (pointer.id === this.touchAimPointerId) {
+      this.updateTouchAim(pointer);
+    }
+  }
+
+  private updateTouchAim(pointer: Phaser.Input.Pointer): void {
+    this.touchAimAngle = Phaser.Math.Angle.Between(
+      this.playerX,
+      this.playerY,
+      pointer.worldX,
+      pointer.worldY
+    );
+    this.touchControls?.showAim(pointer.x, pointer.y);
+  }
+
+  private endTouchPointer(pointer: Phaser.Input.Pointer): void {
+    if (pointer.id === this.touchMovePointerId) {
+      this.touchMovePointerId = null;
+      this.touchMove.set(0, 0);
+      this.touchControls?.hideMove();
+    }
+
+    if (pointer.id === this.touchAimPointerId) {
+      this.touchAimPointerId = null;
+      this.touchAimAngle = null;
+      this.touchControls?.hideAim();
+    }
+  }
+
+  private resetTouchInput(): void {
+    this.touchMovePointerId = null;
+    this.touchAimPointerId = null;
+    this.touchMove.set(0, 0);
+    this.touchAimAngle = null;
+    this.touchControls?.hideMove();
+    this.touchControls?.hideAim();
   }
 
   private handlePlayerMovement(dt: number): void {
     let vx = 0;
     let vy = 0;
 
-    if (this.keys.A.isDown || this.keys.LEFT.isDown) vx -= 1;
-    if (this.keys.D.isDown || this.keys.RIGHT.isDown) vx += 1;
-    if (this.keys.W.isDown || this.keys.UP.isDown) vy -= 1;
-    if (this.keys.S.isDown || this.keys.DOWN.isDown) vy += 1;
+    if (this.touchMovePointerId !== null) {
+      // Аналоговый стик: скорость зависит от того, как далеко отведён палец.
+      if (Math.hypot(this.touchMove.x, this.touchMove.y) >= TOUCH_CONFIG.DEADZONE) {
+        vx = this.touchMove.x;
+        vy = this.touchMove.y;
+      }
+    } else {
+      if (this.keys.A.isDown || this.keys.LEFT.isDown) vx -= 1;
+      if (this.keys.D.isDown || this.keys.RIGHT.isDown) vx += 1;
+      if (this.keys.W.isDown || this.keys.UP.isDown) vy -= 1;
+      if (this.keys.S.isDown || this.keys.DOWN.isDown) vy += 1;
 
-    if (vx !== 0 && vy !== 0) {
-      vx *= Math.SQRT1_2;
-      vy *= Math.SQRT1_2;
+      if (vx !== 0 && vy !== 0) {
+        vx *= Math.SQRT1_2;
+        vy *= Math.SQRT1_2;
+      }
     }
 
     const { WIDTH, HEIGHT, PADDING } = GAME_CONFIG.WORLD;
@@ -522,8 +654,13 @@ export class GameScene extends Phaser.Scene {
     this.playerVisual.shadow.setPosition(this.playerX + 2, this.playerY + 13);
     this.ambientGlow.setPosition(this.playerX, this.playerY);
 
-    const pointer = this.input.activePointer;
-    this.aimAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, pointer.worldX, pointer.worldY);
+    if (this.touchAimPointerId !== null && this.touchAimAngle !== null) {
+      this.aimAngle = this.touchAimAngle;
+    } else if (!this.isTouchDevice) {
+      const pointer = this.input.activePointer;
+      this.aimAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, pointer.worldX, pointer.worldY);
+    }
+
     this.player.setRotation(this.aimAngle);
   }
 
@@ -549,7 +686,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     const pointer = this.input.activePointer;
-    if ((this.keys.SPACE.isDown || pointer.leftButtonDown()) && this.fireCooldown <= 0) {
+    const pointerFire = !pointer.wasTouch && pointer.leftButtonDown();
+    const touchFire = this.isTouchDevice && this.touchAimPointerId !== null;
+    if ((this.keys.SPACE.isDown || pointerFire || touchFire) && this.fireCooldown <= 0) {
       this.tryFireProjectile();
     }
   }

@@ -34,6 +34,13 @@ import {
 
 const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
 
+/** На сенсорных экранах подсказки про клавиши заменяются на жесты. */
+function isTouchUi(): boolean {
+  return typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : false;
+}
+
 /** «II / III» — этап, на котором закончился спуск. */
 function formatFloor(floor: number): string {
   return `${FLOOR_ROMAN[floor - 1] ?? 'I'} / ${FLOOR_ROMAN[FLOOR_ROMAN.length - 1]}`;
@@ -179,10 +186,15 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const leftControlsBody = body(
     leftX,
     -118,
-    'WASD или стрелки — движение\n' +
-      'Курсор мыши — направление взгляда\n' +
-      'ЛКМ или Пробел — выстрел (15 маны)\n' +
-      'ESC — пауза'
+    isTouchUi()
+      ? 'Левая половина — движение\n' +
+          'Правая половина — прицел и огонь\n' +
+          'Верхняя полоса — панели и пауза\n' +
+          'Отпустите палец, чтобы остановиться'
+      : 'WASD или стрелки — движение\n' +
+          'Курсор мыши — направление взгляда\n' +
+          'ЛКМ или Пробел — выстрел (15 маны)\n' +
+          'ESC — пауза'
   );
 
   const rightCombatHeader = headers(rightX, -146, 'БОЙ');
@@ -1228,11 +1240,16 @@ export function drawPauseScreen(
     card.add(cell);
   });
 
-  const hint = scene.add.text(0, 64, 'ESC — продолжить игру', {
-    fontFamily: UI_FONT.body,
-    fontSize: '12px',
-    color: '#94a3b8',
-  }).setOrigin(0.5);
+  const hint = scene.add.text(
+    0,
+    64,
+    isTouchUi() ? 'Кнопка «Продолжить» вернёт в бой' : 'ESC — продолжить игру',
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      color: '#94a3b8',
+    }
+  ).setOrigin(0.5);
 
   const resumeButton = createButton(scene, 0, 126, 340, 56, 'ПРОДОЛЖИТЬ', {
     variant: 'primary',

@@ -39,7 +39,7 @@ export interface PhaseDefinition {
 
 export const PHASES: Record<PhaseKey, PhaseDefinition> = {
   LIGHT: {
-    lightRadius: 260,
+    lightRadius: 200,
     ringColor: 0xfbbf24,
     playerSpeedFactor: 1,
     notice: {

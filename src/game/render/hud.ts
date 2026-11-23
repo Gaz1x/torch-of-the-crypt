@@ -3,6 +3,7 @@ import { GAME_CONFIG } from '../core/gameConfig';
 import type { PhaseKey } from '../core/phases';
 import { UPGRADES } from '../core/upgrades';
 import {
+  createButton,
   createIcon,
   createMedallion,
   createPanel,
@@ -52,6 +53,14 @@ export interface HudStats {
   boss: BossHudStats | null;
   /** Время кадра в секундах — для плавного «призрачного» урона босса. */
   dt: number;
+}
+
+/** Настройки HUD, которые зависят от устройства. */
+export interface HudOptions {
+  /** На телефоне ключевые подписи и цифры крупнее. */
+  touch?: boolean;
+  /** Кнопка паузы нужна там, где нет клавиши ESC. */
+  onPause?: () => void;
 }
 
 export interface HudParts {
@@ -138,8 +147,12 @@ function createStatLabel(
   });
 }
 
-export function createHud(scene: Phaser.Scene): HudParts {
+export function createHud(scene: Phaser.Scene, options: HudOptions = {}): HudParts {
   const container = scene.add.container(0, 0).setDepth(UI_DEPTH.hud);
+  // На телефоне увеличиваем только ключевые надписи, чтобы не ломать
+  // плотную сетку панелей.
+  const fontBoost = options.touch ? 1.2 : 1;
+  const font = (size: number): string => `${Math.round(size * fontBoost)}px`;
 
   // ---------------------------------------------------------------- СТРАЖ
   const leftPanel = createPanel(
@@ -209,7 +222,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
   const manaLabel = createStatLabel(scene, MANA_BAR.x, 70, 'МАНА');
   const manaValueText = scene.add.text(MANA_BAR.x + MANA_BAR.width, 70, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: font(9),
     fontStyle: 'bold',
     color: '#7dd3fc',
   }).setOrigin(1, 0);
@@ -273,7 +286,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const waveText = scene.add.text(96, 14, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: font(10),
     fontStyle: 'bold',
     color: '#8fb8d8',
     letterSpacing: 1.5,
@@ -281,20 +294,20 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const waveNameText = scene.add.text(96, 31, '', {
     fontFamily: UI_FONT.display,
-    fontSize: '19px',
+    fontSize: font(19),
     fontStyle: 'bold',
     color: '#e8eef7',
   });
 
   const enemiesLeftText = scene.add.text(96, 60, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '11px',
+    fontSize: font(11),
     color: '#a9b7c9',
   });
 
   const slowedText = scene.add.text(96, 76, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: font(10),
     color: '#7dd3fc',
   });
 
@@ -308,21 +321,21 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const scoreValueText = scene.add.text(96, 108, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '15px',
+    fontSize: font(15),
     fontStyle: 'bold',
     color: '#f0c674',
   });
 
   const timeValueText = scene.add.text(190, 108, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '14px',
+    fontSize: font(14),
     fontStyle: 'bold',
     color: '#e2e8f0',
   });
 
   const killsValueText = scene.add.text(284, 108, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '14px',
+    fontSize: font(14),
     fontStyle: 'bold',
     color: '#e2e8f0',
   });
@@ -359,7 +372,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const phaseTitleText = scene.add.text(66, 12, '', {
     fontFamily: UI_FONT.display,
-    fontSize: '15px',
+    fontSize: font(15),
     fontStyle: 'bold',
     color: '#f0c674',
     letterSpacing: 2,
@@ -367,7 +380,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const phaseProgressText = scene.add.text(66, 34, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: font(10),
     color: '#a9b7c9',
   });
 
@@ -396,7 +409,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const bossNameText = scene.add.text(0, -2, '', {
     fontFamily: UI_FONT.display,
-    fontSize: '13px',
+    fontSize: font(13),
     fontStyle: 'bold',
     color: '#f0c674',
     stroke: '#05070c',
@@ -422,7 +435,7 @@ export function createHud(scene: Phaser.Scene): HudParts {
 
   const bossEnragedText = scene.add.text(238, -2, 'ЯРОСТЬ', {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: font(9),
     fontStyle: 'bold',
     color: '#fca5a5',
     letterSpacing: 1,
@@ -437,6 +450,20 @@ export function createHud(scene: Phaser.Scene): HudParts {
     bossEnragedText,
   ]);
   container.add(bossBarContainer);
+
+  // ---------------------------------------------------------- КНОПКА ПАУЗЫ
+  // На телефоне нет ESC, поэтому пауза доступна отдельной кнопкой в зазоре
+  // между «Факелом» и «Хроникой».
+  if (options.touch && options.onPause) {
+    const pauseButton = createButton(scene, 826, 58, 84, 84, 'II', {
+      variant: 'ghost',
+      accent: UI_COLORS.brass,
+      accentHex: '#f0c674',
+      onClick: options.onPause,
+      fontSize: 22,
+    });
+    container.add(pauseButton.container);
+  }
 
   return {
     container,

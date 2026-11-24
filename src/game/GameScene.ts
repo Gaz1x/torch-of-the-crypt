@@ -176,12 +176,13 @@ export class GameScene extends Phaser.Scene {
     ESC: Phaser.Input.Keyboard.Key;
   };
 
-  // Touch-управление: левая половина — движение, правая — прицел и огонь.
+  // Touch-управление: левая половина — стик движения, правая — стик прицела.
   private isTouchDevice = false;
   private touchControls?: TouchControls;
   private touchMovePointerId: number | null = null;
   private touchAimPointerId: number | null = null;
   private touchMoveOrigin = new Phaser.Math.Vector2();
+  private touchAimOrigin = new Phaser.Math.Vector2();
   private touchMove = new Phaser.Math.Vector2();
   private touchAimAngle: number | null = null;
 
@@ -550,7 +551,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   // ---------------------------------------------------------- TOUCH-ВВОД
-  // Левая половина экрана — движение, правая — прицел и огонь.
+  // Левая половина экрана — стик движения, правая — стик прицела и огня.
   // Верхняя полоса HUD не участвует: там панели и кнопка паузы.
 
   private beginTouch(pointer: Phaser.Input.Pointer): void {
@@ -567,7 +568,9 @@ export class GameScene extends Phaser.Scene {
 
     if (this.touchAimPointerId !== null) return;
     this.touchAimPointerId = pointer.id;
-    this.updateTouchAim(pointer);
+    this.touchAimOrigin.set(pointer.x, pointer.y);
+    this.touchAimAngle = null;
+    this.touchControls?.showAim(pointer.x, pointer.y);
   }
 
   private updateTouchPointer(pointer: Phaser.Input.Pointer): void {
@@ -589,13 +592,46 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateTouchAim(pointer: Phaser.Input.Pointer): void {
-    this.touchAimAngle = Phaser.Math.Angle.Between(
-      this.playerX,
-      this.playerY,
-      pointer.worldX,
-      pointer.worldY
-    );
-    this.touchControls?.showAim(pointer.x, pointer.y);
+    const dx = pointer.x - this.touchAimOrigin.x;
+    const dy = pointer.y - this.touchAimOrigin.y;
+    const distance = Math.hypot(dx, dy);
+    const limit = TOUCH_CONFIG.JOYSTICK_RADIUS;
+    const scale = distance > limit ? limit / distance : 1;
+
+    this.touchControls?.updateAim(dx * scale, dy * scale);
+
+    // В мёртвой зоне прицел не меняется, огонь не идёт.
+    if (distance < limit * TOUCH_CONFIG.AIM_DEADZONE) {
+      this.touchAimAngle = null;
+      return;
+    }
+
+    this.touchAimAngle = this.applyAimAssist(Math.atan2(dy, dx));
+  }
+
+  /**
+   * Слабая доводка к ближайшему врагу: снаряд подтягивается к нему, только
+   * если тот попадает в узкий конус вокруг выбранного направления.
+   */
+  private applyAimAssist(angle: number): number {
+    const { TOUCH_AIM_ASSIST_ANGLE, TOUCH_AIM_ASSIST_STRENGTH } = GAME_CONFIG.COMBAT;
+
+    let nearest: EnemyEntity | null = null;
+    let nearestDistance = Infinity;
+    for (const enemy of this.enemies) {
+      const distance = Phaser.Math.Distance.Between(this.playerX, this.playerY, enemy.x, enemy.y);
+      if (distance < nearestDistance) {
+        nearest = enemy;
+        nearestDistance = distance;
+      }
+    }
+    if (!nearest) return angle;
+
+    const targetAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, nearest.x, nearest.y);
+    const delta = Phaser.Math.Angle.Wrap(targetAngle - angle);
+    if (Math.abs(delta) > TOUCH_AIM_ASSIST_ANGLE) return angle;
+
+    return angle + delta * TOUCH_AIM_ASSIST_STRENGTH;
   }
 
   private endTouchPointer(pointer: Phaser.Input.Pointer): void {
@@ -687,7 +723,8 @@ export class GameScene extends Phaser.Scene {
 
     const pointer = this.input.activePointer;
     const pointerFire = !pointer.wasTouch && pointer.leftButtonDown();
-    const touchFire = this.isTouchDevice && this.touchAimPointerId !== null;
+    // Стреляем, только когда стик прицела выведен за мёртвую зону.
+    const touchFire = this.isTouchDevice && this.touchAimAngle !== null;
     if ((this.keys.SPACE.isDown || pointerFire || touchFire) && this.fireCooldown <= 0) {
       this.tryFireProjectile();
     }

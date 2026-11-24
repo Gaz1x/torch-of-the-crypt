@@ -3,7 +3,7 @@ import { UI_COLORS, UI_DEPTH } from './uiKit';
 
 // ============================================================================
 // TOUCH-УПРАВЛЕНИЕ
-// Только отрисовка: плавающий стик движения и маркер прицела. Игровая логика
+// Только отрисовка: два плавающих стика — движение и прицел. Игровая логика
 // (какой палец за что отвечает) живёт в GameScene.
 // ============================================================================
 
@@ -13,9 +13,10 @@ export const TOUCH_CONFIG = {
   HUD_SAFE_HEIGHT: 150,
   JOYSTICK_RADIUS: 80,
   KNOB_RADIUS: 32,
-  AIM_RADIUS: 22,
   /** Ход стика, при котором движение ещё не начинается. */
   DEADZONE: 0.16,
+  /** Доля радиуса стика прицела, ниже которой огонь не идёт. */
+  AIM_DEADZONE: 0.25,
 } as const;
 
 export interface TouchControls {
@@ -25,8 +26,10 @@ export interface TouchControls {
   /** Сдвинуть рукоятку относительно базы. */
   updateMove: (x: number, y: number) => void;
   hideMove: () => void;
-  /** Показать маркер в точке прицеливания. */
+  /** Показать стик прицела в точке первого касания. */
   showAim: (x: number, y: number) => void;
+  /** Сдвинуть рукоятку прицела относительно базы. */
+  updateAim: (x: number, y: number) => void;
   hideAim: () => void;
   setVisible: (visible: boolean) => void;
 }
@@ -57,21 +60,19 @@ export function createTouchControls(scene: Phaser.Scene): TouchControls {
   // -------------------------------------------------------------- ПРИЦЕЛ
   const aimGroup = scene.add.container(0, 0).setVisible(false);
 
-  const aimRing = scene.add
-    .circle(0, 0, TOUCH_CONFIG.AIM_RADIUS, 0x000000, 0)
-    .setStrokeStyle(2, UI_COLORS.emberBright, 0.85);
+  const aimBase = scene.add
+    .circle(0, 0, TOUCH_CONFIG.JOYSTICK_RADIUS, 0x0f172a, 0.32)
+    .setStrokeStyle(2, UI_COLORS.emberBright, 0.55);
 
-  const aimDot = scene.add.circle(0, 0, 3, UI_COLORS.emberBright, 0.95);
+  const aimInner = scene.add
+    .circle(0, 0, TOUCH_CONFIG.JOYSTICK_RADIUS - 14, 0x000000, 0)
+    .setStrokeStyle(1, UI_COLORS.ember, 0.35);
 
-  const aimTicks = scene.add.graphics();
-  aimTicks.lineStyle(2, UI_COLORS.emberBright, 0.7);
-  const tick = TOUCH_CONFIG.AIM_RADIUS + 4;
-  aimTicks.lineBetween(-tick, 0, -tick + 6, 0);
-  aimTicks.lineBetween(tick - 6, 0, tick, 0);
-  aimTicks.lineBetween(0, -tick, 0, -tick + 6);
-  aimTicks.lineBetween(0, tick - 6, 0, tick);
+  const aimKnob = scene.add
+    .circle(0, 0, TOUCH_CONFIG.KNOB_RADIUS, UI_COLORS.emberBright, 0.24)
+    .setStrokeStyle(2, UI_COLORS.emberBright, 0.9);
 
-  aimGroup.add([aimRing, aimTicks, aimDot]);
+  aimGroup.add([aimBase, aimInner, aimKnob]);
 
   container.add([moveGroup, aimGroup]);
 
@@ -93,6 +94,11 @@ export function createTouchControls(scene: Phaser.Scene): TouchControls {
 
     showAim(x, y) {
       aimGroup.setPosition(x, y).setVisible(true);
+      aimKnob.setPosition(0, 0);
+    },
+
+    updateAim(x, y) {
+      aimKnob.setPosition(x, y);
     },
 
     hideAim() {

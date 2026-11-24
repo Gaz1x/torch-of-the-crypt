@@ -2,7 +2,17 @@
 // КОНФИГУРАЦИЯ ИГРЫ (Все константы для легкого масштабирования и баланса)
 // ============================================================================
 
-export type EnemyTypeKey = 'SWARMER' | 'STALKER' | 'BRUTE' | 'SPITTER' | 'BOMBER';
+export type EnemyTypeKey =
+  | 'SWARMER'
+  | 'STALKER'
+  | 'BRUTE'
+  | 'SPITTER'
+  | 'BOMBER'
+  | 'HOUND'
+  | 'WATCHER'
+  | 'ELITE_STALKER'
+  | 'ELITE_BRUTE'
+  | 'ELITE_BOMBER';
 
 /** Как враг ведёт себя в бою. Логика поведения живёт в GameScene. */
 export type EnemyBehavior = 'CHASER' | 'RANGED' | 'EXPLODER' | 'BOSS';
@@ -20,6 +30,8 @@ export interface EnemyConfig {
   eyeColor: number;
   scoreValue: number;
   manaDrop: number;
+  /** Усиленная версия обычного врага: яркая обводка и ореол. */
+  elite?: boolean;
   /** Дальность стрельбы (только для RANGED). */
   attackRange?: number;
   /** Пауза между выстрелами в секундах (только для RANGED). */
@@ -152,6 +164,88 @@ export const GAME_CONFIG = {
       manaDrop: 20,
       explosionRadius: 120,
       explosionWindup: 0.85,
+    },
+
+    // --- Новые типы второй и третьей локаций ---
+    HOUND: {
+      name: 'Пепельная гончая',
+      behavior: 'CHASER',
+      hp: 1,
+      speed: 235,
+      lightSlowFactor: 0.5,
+      radius: 11,
+      bodyColor: 0x1f0a12,
+      strokeColor: 0xf43f5e,
+      lightStrokeColor: 0xfda4af,
+      eyeColor: 0xfde68a,
+      scoreValue: 2,
+      manaDrop: 16,
+    },
+    WATCHER: {
+      name: 'Молчаливый страж',
+      behavior: 'RANGED',
+      hp: 2,
+      speed: 95,
+      lightSlowFactor: 0.5,
+      radius: 15,
+      bodyColor: 0x0b1a1a,
+      strokeColor: 0x0d9488,
+      lightStrokeColor: 0x5eead4,
+      eyeColor: 0x99f6e4,
+      scoreValue: 4,
+      manaDrop: 24,
+      attackRange: 380,
+      attackCooldown: 2.6,
+      projectileSpeed: 280,
+    },
+
+    // --- Элитные версии: тот же силуэт, другие статы и палитра ---
+    ELITE_STALKER: {
+      name: 'Элитный сталкер',
+      behavior: 'CHASER',
+      hp: 3,
+      speed: 170,
+      lightSlowFactor: 0.42,
+      radius: 17,
+      bodyColor: 0x1a103c,
+      strokeColor: 0xf59e0b,
+      lightStrokeColor: 0xfbbf24,
+      eyeColor: 0xfef08a,
+      scoreValue: 5,
+      manaDrop: 30,
+      elite: true,
+    },
+    ELITE_BRUTE: {
+      name: 'Костяной брут',
+      behavior: 'CHASER',
+      hp: 6,
+      speed: 95,
+      lightSlowFactor: 0.55,
+      radius: 26,
+      bodyColor: 0x1c0f0f,
+      strokeColor: 0xf97316,
+      lightStrokeColor: 0xfbbf24,
+      eyeColor: 0xfde68a,
+      scoreValue: 10,
+      manaDrop: 60,
+      elite: true,
+    },
+    ELITE_BOMBER: {
+      name: 'Гнилой мученик',
+      behavior: 'EXPLODER',
+      hp: 4,
+      speed: 150,
+      lightSlowFactor: 0.55,
+      radius: 18,
+      bodyColor: 0x33130a,
+      strokeColor: 0xfb923c,
+      lightStrokeColor: 0xfde68a,
+      eyeColor: 0xfef3c7,
+      scoreValue: 6,
+      manaDrop: 35,
+      explosionRadius: 150,
+      explosionWindup: 0.7,
+      elite: true,
     },
   } as Record<EnemyTypeKey, EnemyConfig>,
 } as const;

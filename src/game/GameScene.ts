@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import soundtrackUrl from '../assets/audio/soundtrack.mp3';
 import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameConfig';
 import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
-import { WAVES, getFloorIndex, isFloorEnd, type WaveConfig } from './core/waves';
+import { LEVELS, getFloorIndex, isFloorEnd, type LevelConfig, type WaveConfig } from './core/waves';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
 import { pickBoonChoices, type BoonKey } from './core/boons';
 import {
@@ -134,6 +134,9 @@ export class GameScene extends Phaser.Scene {
 
   // Волны
   private waveIndex = 0;
+  /** Локация, в которой идёт спуск, и выбранная в лагере. */
+  private levelIndex = 0;
+  private selectedLevel = 0;
   private waveSpawned = 0;
   private waveSpawnTimer = 0;
   private waveTransitionTimer = 0;
@@ -143,6 +146,11 @@ export class GameScene extends Phaser.Scene {
   private bossAddsTimer = 0;
   /** Дары, выбранные в этом спуске. Живут только до конца партии. */
   private boons = new Set<BoonKey>();
+
+  /** Текущая локация: её этажи и волны. */
+  private get level(): LevelConfig {
+    return LEVELS[this.levelIndex] ?? LEVELS[0];
+  }
 
   // Звук и настройки
   private settings: GameSettings = loadSettings();
@@ -205,6 +213,9 @@ export class GameScene extends Phaser.Scene {
       typeof window.matchMedia === 'function'
         ? window.matchMedia('(pointer: coarse)').matches
         : this.sys.game.device.input.touch;
+
+    // В лагере по умолчанию выбрана последняя открытая локация.
+    this.selectedLevel = this.profile.unlockedLevels - 1;
 
     const layout = drawCryptEnvironment(this);
     this.cracks = layout.cracks;
@@ -890,7 +901,7 @@ export class GameScene extends Phaser.Scene {
 
     if (!this.waveActive) return;
 
-    const wave = WAVES[this.waveIndex];
+    const wave = this.level.waves[this.waveIndex];
     if (!wave) return;
 
     // Боссовая волна заканчивается смертью босса в updateEnemies,
@@ -951,7 +962,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private beginWave(index: number): void {
-    const wave = WAVES[index];
+    const wave = this.level.waves[index];
     if (!wave) return;
 
     this.waveIndex = index;
@@ -965,7 +976,7 @@ export class GameScene extends Phaser.Scene {
     const detail = wave.boss
       ? 'Хранитель крипты вышел на охоту · не дайте факелу погаснуть'
       : `${wave.spawnCount} теней · не дайте факелу погаснуть`;
-    showWaveNotice(this, index + 1, WAVES.length, wave.name, detail);
+    showWaveNotice(this, index + 1, this.level.waves.length, wave.name, detail);
 
     if (wave.boss) {
       this.spawnBoss(wave.boss);
@@ -982,7 +993,7 @@ export class GameScene extends Phaser.Scene {
     this.clearEnemyProjectiles();
     hideBossBar(this.hud);
 
-    if (this.waveIndex >= WAVES.length - 1) {
+    if (this.waveIndex >= this.level.waves.length - 1) {
       this.triggerVictory();
       return;
     }
@@ -992,7 +1003,7 @@ export class GameScene extends Phaser.Scene {
     this.mana = Math.min(GAME_CONFIG.COMBAT.MAX_MANA, this.mana + 25);
 
     // Конец этажа: вместо таймера показываем выбор дара.
-    if (isFloorEnd(this.waveIndex)) {
+    if (isFloorEnd(this.level, this.waveIndex)) {
       this.showGiftChoice();
       return;
     }
@@ -1322,16 +1333,38 @@ export class GameScene extends Phaser.Scene {
   ): void {
     const cfg = e.config as BossConfig;
 
-    // Ярость на половине HP: ускорение и два сталкера.
+    // Ярость на половине HP: все боссы ускоряются, а Пожиратель зовёт сталкеров.
     if (!e.hasEnraged && e.hp <= e.maxHp * cfg.enrageThreshold) {
       e.hasEnraged = true;
-      showFloatingText(this, e.x, e.y - cfg.radius - 18, 'ЯРОСТЬ ПЛАМЕНИ', '#ef4444');
+      showFloatingText(this, e.x, e.y - cfg.radius - 18, 'ЯРОСТЬ', '#ef4444');
       this.cameras.main.shake(260, 0.01);
-      for (let i = 0; i < 2; i++) {
-        this.spawnEnemy('STALKER');
+      if (cfg.mechanic === 'CHARGER') {
+        for (let i = 0; i < 2; i++) {
+          this.spawnEnemy('STALKER');
+        }
       }
     }
 
+    if (cfg.mechanic === 'SHOOTER') {
+      this.updateBossShooter(e, cfg, dt, dist, angle);
+    } else if (cfg.mechanic === 'SUMMONER') {
+      this.updateBossSummoner(e, cfg, dt, dist, angle);
+    } else {
+      this.updateBossCharger(e, cfg, dt, dist, angle, time);
+    }
+
+    this.applyBossContactDamage(e, cfg);
+  }
+
+  /** CHARGER: медленно идёт, гасит факел и делает рывок. */
+  private updateBossCharger(
+    e: EnemyEntity,
+    cfg: BossConfig,
+    dt: number,
+    dist: number,
+    angle: number,
+    time: number
+  ): void {
     if (e.state === 'CHASE') {
       const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1) * (e.hasEnraged ? 1.2 : 1);
       e.x += Math.cos(angle) * speed * dt;
@@ -1345,8 +1378,8 @@ export class GameScene extends Phaser.Scene {
 
       // Гашение факела.
       if (e.specialTimer <= 0) {
-        e.specialTimer = cfg.drainCooldown * (e.hasEnraged ? 0.8 : 1);
-        this.torchDrainTimer = cfg.drainDuration;
+        e.specialTimer = (cfg.drainCooldown ?? 9) * (e.hasEnraged ? 0.8 : 1);
+        this.torchDrainTimer = cfg.drainDuration ?? 3;
         this.applyCurrentPhase();
         showFloatingText(this, this.playerX, this.playerY - 36, 'ФАКЕЛ ГАСНЕТ', '#ef4444');
       }
@@ -1356,7 +1389,7 @@ export class GameScene extends Phaser.Scene {
         e.state = 'WINDUP';
         e.stateTimer = 0.8;
         e.chargeAngle = angle;
-        e.attackTimer = cfg.chargeCooldown * (e.hasEnraged ? 0.8 : 1);
+        e.attackTimer = (cfg.chargeCooldown ?? 6) * (e.hasEnraged ? 0.8 : 1);
         e.container.setScale(1.12);
       }
     } else if (e.state === 'WINDUP') {
@@ -1369,7 +1402,7 @@ export class GameScene extends Phaser.Scene {
         e.stateTimer = 0.55;
       }
     } else if (e.state === 'ATTACK') {
-      const chargeSpeed = cfg.chargeSpeed * (e.hasEnraged ? 1.15 : 1);
+      const chargeSpeed = (cfg.chargeSpeed ?? 520) * (e.hasEnraged ? 1.15 : 1);
       e.x += Math.cos(e.chargeAngle) * chargeSpeed * dt;
       e.y += Math.sin(e.chargeAngle) * chargeSpeed * dt;
       this.clampEnemyPosition(e);
@@ -1388,14 +1421,106 @@ export class GameScene extends Phaser.Scene {
         e.state = 'CHASE';
       }
     }
+  }
 
+  /** SHOOTER: держит дистанцию и бьёт веером снарядов. */
+  private updateBossShooter(
+    e: EnemyEntity,
+    cfg: BossConfig,
+    dt: number,
+    dist: number,
+    angle: number
+  ): void {
+    const keepDistance = 300;
+    const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1) * (e.hasEnraged ? 1.15 : 1);
+
+    if (dist > keepDistance + 50) {
+      e.x += Math.cos(angle) * speed * dt;
+      e.y += Math.sin(angle) * speed * dt;
+    } else if (dist < keepDistance - 90) {
+      e.x -= Math.cos(angle) * speed * dt;
+      e.y -= Math.sin(angle) * speed * dt;
+    }
+
+    this.clampEnemyPosition(e);
+    e.container.setPosition(e.x, e.y);
+    e.container.setRotation(angle);
+
+    e.attackTimer -= dt;
+    if (e.attackTimer > 0) return;
+
+    const count = cfg.shotCount ?? 3;
+    const spread = cfg.shotSpread ?? 0.5;
+    const shotSpeed = cfg.shotSpeed ?? 250;
+    for (let i = 0; i < count; i++) {
+      const offset = count > 1 ? -spread / 2 + (spread * i) / (count - 1) : 0;
+      this.fireEnemyProjectile(e, angle + offset, shotSpeed);
+    }
+
+    e.attackTimer = (cfg.shotCooldown ?? 2.6) * (e.hasEnraged ? 0.7 : 1);
+    if (e.glow) {
+      e.glow.setScale(1.3);
+      this.tweens.add({
+        targets: e.glow,
+        scale: 1,
+        duration: 240,
+        ease: 'Quad.easeOut',
+      });
+    }
+  }
+
+  /** SUMMONER: держит дистанцию и по таймеру зовёт свиту. */
+  private updateBossSummoner(
+    e: EnemyEntity,
+    cfg: BossConfig,
+    dt: number,
+    dist: number,
+    angle: number
+  ): void {
+    const keepDistance = 240;
+    const speed = cfg.speed * (e.inLight ? cfg.lightSlowFactor : 1) * (e.hasEnraged ? 1.2 : 1);
+
+    if (dist > keepDistance + 50) {
+      e.x += Math.cos(angle) * speed * dt;
+      e.y += Math.sin(angle) * speed * dt;
+    } else if (dist < keepDistance - 70) {
+      e.x -= Math.cos(angle) * speed * dt;
+      e.y -= Math.sin(angle) * speed * dt;
+    }
+
+    this.clampEnemyPosition(e);
+    e.container.setPosition(e.x, e.y);
+    e.container.setRotation(angle);
+
+    e.specialTimer -= dt;
+    if (e.specialTimer > 0) return;
+
+    e.specialTimer = (cfg.summonInterval ?? 6) * (e.hasEnraged ? 0.7 : 1);
+    e.container.setScale(1.18);
+    this.tweens.add({
+      targets: e.container,
+      scale: 1,
+      duration: 260,
+      ease: 'Quad.easeOut',
+    });
+    showFloatingText(this, e.x, e.y - cfg.radius - 16, 'РОЙ ПРОБУЖДАЕТСЯ', '#a3e635');
+
+    const summonType = cfg.summonType ?? 'SWARMER';
+    for (let i = 0; i < (cfg.summonCount ?? 2); i++) {
+      this.spawnEnemy(summonType);
+    }
+  }
+
+  /** Контактный урон босса: у рывка своя цифра, у остальных — обычная. */
+  private applyBossContactDamage(e: EnemyEntity, cfg: BossConfig): void {
     const contactDist = Phaser.Math.Distance.Between(e.x, e.y, this.playerX, this.playerY);
     if (
       contactDist < cfg.radius + GAME_CONFIG.PLAYER.RADIUS &&
       this.invulnTimer <= 0 &&
       e.contactCooldown <= 0
     ) {
-      this.damagePlayer(e.state === 'ATTACK' ? cfg.chargeDamage : cfg.contactDamage);
+      const damage = e.state === 'ATTACK' ? (cfg.chargeDamage ?? cfg.contactDamage) : cfg.contactDamage;
+      this.damagePlayer(damage);
       e.contactCooldown = GAME_CONFIG.COMBAT.MELEE_CONTACT_COOLDOWN;
     }
   }
@@ -1422,8 +1547,8 @@ export class GameScene extends Phaser.Scene {
     e.y = Phaser.Math.Clamp(e.y, PADDING, HEIGHT - PADDING);
   }
 
-  private fireEnemyProjectile(e: EnemyEntity, angle: number): void {
-    const speed = e.config.projectileSpeed ?? 230;
+  private fireEnemyProjectile(e: EnemyEntity, angle: number, speedOverride?: number): void {
+    const speed = speedOverride ?? e.config.projectileSpeed ?? 230;
     const spawnX = e.x + Math.cos(angle) * (e.config.radius + 10);
     const spawnY = e.y + Math.sin(angle) * (e.config.radius + 10);
 
@@ -1544,7 +1669,7 @@ export class GameScene extends Phaser.Scene {
   // ============================================================================
 
   private updateHUD(dt: number): void {
-    const wave = WAVES[this.waveIndex];
+    const wave = this.level.waves[this.waveIndex];
     const phase = getPhaseProgress(this.score);
     const bossEntity = this.enemies.find((e) => e.isBoss);
 
@@ -1566,8 +1691,8 @@ export class GameScene extends Phaser.Scene {
       survivalTime: this.survivalTime,
       slowedEnemies: this.enemies.filter((e) => e.inLight).length,
       wave: this.waveIndex + 1,
-      wavesTotal: WAVES.length,
-      floor: FLOOR_ROMAN[getFloorIndex(this.waveIndex)] ?? 'III',
+      wavesTotal: this.level.waves.length,
+      floor: FLOOR_ROMAN[getFloorIndex(this.level, this.waveIndex)] ?? 'III',
       waveName: wave?.name ?? '',
       enemiesLeft: pendingSpawns + this.enemies.length,
       addsLeft: wave?.boss ? addsAlive : null,
@@ -1649,7 +1774,15 @@ export class GameScene extends Phaser.Scene {
       this.uiOverlay,
       this.getProfileController(),
       () => this.startGame(),
-      this.getSettingsController()
+      this.getSettingsController(),
+      {
+        index: this.selectedLevel,
+        unlocked: this.profile.unlockedLevels,
+        levels: LEVELS.map((level) => level.name),
+        onChange: (index) => {
+          this.selectedLevel = index;
+        },
+      }
     );
 
     // Меню проявляется мягко, а не появляется одним кадром.
@@ -1665,6 +1798,8 @@ export class GameScene extends Phaser.Scene {
   /** Плавно гасит меню и только потом начинает новый спуск. */
   private startGame(): void {
     if (this.startingRun) return;
+    // Закрытую локацию запустить нельзя.
+    if (this.selectedLevel >= this.profile.unlockedLevels) return;
     this.startingRun = true;
 
     this.tweens.add({
@@ -1680,8 +1815,9 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  /** Сбрасывает партию и запускает первую волну. */
+  /** Сбрасывает партию и запускает первую волну выбранной локации. */
   private beginRun(): void {
+    this.levelIndex = this.selectedLevel;
     this.clearField();
     this.resetPlayerPosition();
     this.applyProfileBonuses();
@@ -1745,14 +1881,15 @@ export class GameScene extends Phaser.Scene {
       manaCollected: this.manaCollected,
       accuracy,
       wave: this.waveIndex + 1,
-      wavesTotal: WAVES.length,
-      floor: getFloorIndex(this.waveIndex) + 1,
+      wavesTotal: this.level.waves.length,
+      floor: getFloorIndex(this.level, this.waveIndex) + 1,
       bossesKilled: this.bossesKilled,
       hp: this.hp,
       maxHp: this.maxHp,
       echoGained: 0,
       echoTotal: this.profile.echo,
       victory,
+      newlyUnlockedLevel: null,
     };
   }
 
@@ -1767,6 +1904,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.runRecorded = true;
+    const unlockedBefore = this.profile.unlockedLevels;
     const reward = applyRun(this.profile, {
       score: stats.score,
       survivalTime: stats.survivalTime,
@@ -1774,12 +1912,15 @@ export class GameScene extends Phaser.Scene {
       victory,
       bossesKilled: stats.bossesKilled,
       rank: calculateRank(stats).letter,
+      levelIndex: this.levelIndex,
     });
 
     this.profile = reward.profile;
     saveProfile(this.profile);
     stats.echoGained = reward.echoGained;
     stats.echoTotal = this.profile.echo;
+    stats.newlyUnlockedLevel =
+      this.profile.unlockedLevels > unlockedBefore ? this.profile.unlockedLevels : null;
 
     return stats;
   }
@@ -1819,10 +1960,16 @@ export class GameScene extends Phaser.Scene {
     this.invulnRing.setVisible(false);
     this.clearEnemyProjectiles();
 
+    const stats = this.finishRun(true);
+    // После победы селектор в лагере сразу показывает новую локацию.
+    if (stats.newlyUnlockedLevel !== null) {
+      this.selectedLevel = stats.newlyUnlockedLevel - 1;
+    }
+
     drawVictoryScreen(
       this,
       this.uiOverlay,
-      this.finishRun(true),
+      stats,
       () => this.startGame(),
       () => this.showStartScreen()
     );
@@ -1881,8 +2028,9 @@ export class GameScene extends Phaser.Scene {
   /** Применяет свойства текущей фазы: радиус света и свечение вокруг игрока. */
   private applyCurrentPhase(): void {
     const baseRadius = PHASES[this.currentPhase].lightRadius * this.lightMultiplier;
-    const radius = this.torchDrainTimer > 0
-      ? Math.min(baseRadius, BOSS_CONFIG.FLAME_EATER.drainRadius)
+    const drainRadius = this.getActiveDrainRadius();
+    const radius = this.torchDrainTimer > 0 && drainRadius !== null
+      ? Math.min(baseRadius, drainRadius)
       : baseRadius;
 
     const ringColor = PHASES[this.currentPhase].ringColor;
@@ -1890,5 +2038,12 @@ export class GameScene extends Phaser.Scene {
     this.lightRingBright.setStrokeStyle(1.5, ringColor, 1);
 
     this.setLightRadius(radius);
+  }
+
+  /** Радиус, до которого активный босс гасит факел (есть только у CHARGER). */
+  private getActiveDrainRadius(): number | null {
+    const boss = this.enemies.find((e) => e.isBoss);
+    if (!boss) return null;
+    return (boss.config as BossConfig).drainRadius ?? null;
   }
 }

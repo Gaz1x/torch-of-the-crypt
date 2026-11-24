@@ -65,6 +65,19 @@ export interface GameOverStats {
   /** Сколько Эха всего накоплено в профиле. */
   echoTotal: number;
   victory: boolean;
+  /** Номер локации, открытой этой победой (если открылась новая). */
+  newlyUnlockedLevel: number | null;
+}
+
+/** Выбор локации на главном экране. */
+export interface LevelSelectState {
+  /** Выбранная локация (0 — первая). */
+  index: number;
+  /** Сколько локаций открыто. */
+  unlocked: number;
+  /** Названия всех локаций по порядку. */
+  levels: string[];
+  onChange: (index: number) => void;
 }
 
 /** Настройки живут в GameScene, экраны только показывают их и меняют. */
@@ -213,7 +226,7 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
   const leftRunBody = body(
     leftX,
     46,
-    'Три этажа по три волны, в конце — босс\n' +
+    'Каждый спуск — три этажа по три волны\n' +
       'После каждого этажа — выбор дара\n' +
       'Между волнами: +1 HP и +25 маны'
   );
@@ -224,7 +237,8 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
     46,
     'Эхо за спуск: очки / 2 + 20 за босса\n' +
       'Победа — полная награда, смерть — половина\n' +
-      'Эхо тратится на улучшения в лагере'
+      'Эхо тратится на улучшения в лагере\n' +
+      'Победа открывает следующую локацию'
   );
 
   const closeButton = createButton(scene, 0, 200, 220, 46, 'ЗАКРЫТЬ', {
@@ -686,7 +700,8 @@ export function drawStartScreen(
   overlay: Phaser.GameObjects.Container,
   profileController: ProfileController,
   onStart: () => void,
-  settingsController: SettingsController
+  settingsController: SettingsController,
+  levelSelect: LevelSelectState
 ): void {
   const { width, height } = scene.scale;
   const screen = scene.add.container(0, 0);
@@ -775,7 +790,7 @@ export function drawStartScreen(
 
   // ------------------------------------------------------- КНОПКИ СПРАВА
   const menuX = 1000;
-  const menuTitle = scene.add.text(menuX, 196, 'ЛАГЕРЬ СТРАЖА', {
+  const menuTitle = scene.add.text(menuX, 168, 'ЛАГЕРЬ СТРАЖА', {
     fontFamily: UI_FONT.body,
     fontSize: '11px',
     fontStyle: 'bold',
@@ -790,6 +805,52 @@ export function drawStartScreen(
     onClick: onStart,
     fontSize: 17,
   });
+
+  // Локация: стрелки листают все, но закрытую нельзя начать.
+  let selectedLevel = Phaser.Math.Clamp(levelSelect.index, 0, Math.max(0, levelSelect.levels.length - 1));
+  const levelLabel = scene.add.text(menuX, 196, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '11px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 1,
+  }).setOrigin(0.5);
+
+  const renderLevel = (): void => {
+    const unlocked = selectedLevel < levelSelect.unlocked;
+    const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
+    const name = levelSelect.levels[selectedLevel] ?? '';
+    levelLabel.setText(
+      unlocked ? `ЛОКАЦИЯ ${roman} · ${name.toUpperCase()}` : `ЛОКАЦИЯ ${roman} · ЗАКРЫТО`
+    );
+    levelLabel.setColor(unlocked ? '#f0c674' : '#64748b');
+    startButton.container.setAlpha(unlocked ? 1 : 0.45);
+  };
+
+  const cycleLevel = (direction: number): void => {
+    const count = Math.max(1, levelSelect.levels.length);
+    selectedLevel = (selectedLevel + direction + count) % count;
+    levelSelect.onChange(selectedLevel);
+    renderLevel();
+  };
+
+  const levelPrev = createButton(scene, 834, 196, 40, 30, '‹', {
+    variant: 'ghost',
+    accent: UI_COLORS.brass,
+    accentHex: '#f0c674',
+    onClick: () => cycleLevel(-1),
+    fontSize: 18,
+  });
+
+  const levelNext = createButton(scene, 1166, 196, 40, 30, '›', {
+    variant: 'ghost',
+    accent: UI_COLORS.brass,
+    accentHex: '#f0c674',
+    onClick: () => cycleLevel(1),
+    fontSize: 18,
+  });
+
+  renderLevel();
 
   const upgradesButton = createButton(scene, menuX, 334, 320, 50, 'УЛУЧШЕНИЯ', {
     variant: 'secondary',
@@ -886,6 +947,9 @@ export function drawStartScreen(
     lore,
     sloganText,
     menuTitle,
+    levelLabel,
+    levelPrev.container,
+    levelNext.container,
     startButton.container,
     upgradesButton.container,
     settingsButton.container,
@@ -1080,11 +1144,15 @@ function drawResultScreen(
   const footnote = scene.add.text(
     0,
     146,
-    `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled}`,
+    stats.newlyUnlockedLevel !== null
+      ? `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled} · Открыта локация ${
+          FLOOR_ROMAN[stats.newlyUnlockedLevel - 1] ?? stats.newlyUnlockedLevel
+        }`
+      : `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled}`,
     {
       fontFamily: UI_FONT.body,
       fontSize: '11px',
-      color: '#8b9bb0',
+      color: stats.newlyUnlockedLevel !== null ? '#f0c674' : '#8b9bb0',
       letterSpacing: 1,
     }
   ).setOrigin(0.5);

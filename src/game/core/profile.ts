@@ -12,6 +12,7 @@ import {
   type UpgradeKey,
   type UpgradeLevels,
 } from './upgrades';
+import { LEVELS } from './waves';
 
 export type RankLetter = 'S' | 'A' | 'B';
 
@@ -52,6 +53,8 @@ export interface Profile {
   bestTime: number;
   bestRank: RankLetter | null;
   upgrades: UpgradeLevels;
+  /** Сколько локаций открыто: 1 — только первая. */
+  unlockedLevels: number;
 }
 
 export const DEFAULT_PROFILE: Profile = {
@@ -64,6 +67,7 @@ export const DEFAULT_PROFILE: Profile = {
   bestTime: 0,
   bestRank: null,
   upgrades: { ...DEFAULT_UPGRADES },
+  unlockedLevels: 1,
 };
 
 export function calculateRank(stats: RankStats): RankResult {
@@ -106,6 +110,8 @@ export interface RunSummary {
   victory: boolean;
   bossesKilled: number;
   rank: RankLetter;
+  /** Индекс локации, в которой прошёл спуск. */
+  levelIndex: number;
 }
 
 export interface RunReward {
@@ -132,6 +138,13 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
     bestScore: Math.max(profile.bestScore, run.score),
     bestTime: Math.max(profile.bestTime, run.survivalTime),
     bestRank: newBestRank ? run.rank : profile.bestRank,
+    // Победа открывает следующую локацию (не больше, чем их всего).
+    unlockedLevels: Math.min(
+      LEVELS.length,
+      run.victory
+        ? Math.max(profile.unlockedLevels, run.levelIndex + 2)
+        : profile.unlockedLevels
+    ),
   };
 
   return { profile: next, echoGained, newBestScore, newBestTime, newBestRank };
@@ -212,6 +225,7 @@ function sanitizeProfile(raw: unknown): Profile {
       : 0,
     bestRank: sanitizeRank(data.bestRank),
     upgrades: sanitizeUpgrades(data.upgrades),
+    unlockedLevels: Math.min(LEVELS.length, Math.max(1, toSafeInt(data.unlockedLevels, 1))),
   };
 }
 

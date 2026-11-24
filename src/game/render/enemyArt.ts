@@ -78,7 +78,71 @@ export function createEnemyVisual(
   let hpBar: Phaser.GameObjects.Rectangle | undefined;
   let hpBarBack: Phaser.GameObjects.Rectangle | undefined;
 
-  switch (type) {
+  // Элиты носят то же тело, что и базовый тип: ELITE_BRUTE → BRUTE.
+  const baseType = (type.startsWith('ELITE_') ? type.slice('ELITE_'.length) : type) as EnemyTypeKey;
+
+  switch (baseType) {
+    case 'HOUND': {
+      const shadowAura = scene.add.circle(0, 0, cfg.radius + 6, 0x450a1a, 0.35);
+      const tail = scene.add.polygon(
+        -cfg.radius + 2,
+        0,
+        [[0, -5], [-16, -9], [-10, 0], [-16, 9], [0, 5]],
+        0x2a0d16
+      ).setOrigin(0).setStrokeStyle(1, cfg.strokeColor, 0.5);
+
+      bodyShape = scene.add.polygon(
+        0,
+        0,
+        [cfg.radius + 4, 0, -cfg.radius, -cfg.radius * 0.75, -cfg.radius * 0.4, 0, -cfg.radius, cfg.radius * 0.75],
+        cfg.bodyColor
+      ).setOrigin(0).setStrokeStyle(2, cfg.strokeColor);
+
+      const fangTop = scene.add.polygon(8, -4, [0, 0, 10, -3, 4, 3], cfg.lightStrokeColor, 0.8)
+        .setOrigin(0);
+      const fangBottom = scene.add.polygon(8, 4, [0, 0, 10, 3, 4, -3], cfg.lightStrokeColor, 0.8)
+        .setOrigin(0);
+
+      const e1 = createEye(scene, 5, -3, 2, cfg.eyeColor);
+      const e2 = createEye(scene, 5, 3, 2, cfg.eyeColor);
+      eyes.push(e1.eye, e2.eye);
+
+      container.add([
+        shadowAura,
+        tail,
+        bodyShape,
+        fangTop,
+        fangBottom,
+        e1.halo,
+        e2.halo,
+        e1.eye,
+        e2.eye,
+      ]);
+      break;
+    }
+
+    case 'WATCHER': {
+      const shadowAura = scene.add.circle(0, 0, cfg.radius + 6, 0x042f2e, 0.35);
+      const hood = scene.add.polygon(
+        -6,
+        0,
+        [[0, -cfg.radius - 3], [-cfg.radius - 4, -6], [-cfg.radius + 2, 0], [-cfg.radius - 4, 6], [0, cfg.radius + 3]],
+        0x0a2a2a
+      ).setOrigin(0).setStrokeStyle(1, cfg.strokeColor, 0.6);
+
+      bodyShape = scene.add.circle(0, 0, cfg.radius, cfg.bodyColor)
+        .setStrokeStyle(2, cfg.strokeColor);
+
+      const lantern = scene.add.circle(7, 0, 7, cfg.eyeColor, 0.18)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      glow = scene.add.circle(7, 0, 4, cfg.eyeColor, 0.9);
+      const pupil = scene.add.circle(8, 0, 1.8, 0x042f2e, 0.9);
+      eyes.push(glow);
+
+      container.add([shadowAura, hood, bodyShape, lantern, glow, pupil]);
+      break;
+    }
+
     case 'SWARMER': {
       const shadowAura = scene.add.circle(0, 0, cfg.radius + 5, 0x3b0764, 0.35);
       const wingTop = scene.add.polygon(-4, -6, [-18, -16, -8, -2, -4, -6], 0x2e1065)
@@ -343,6 +407,15 @@ export function createEnemyVisual(
       ]);
       break;
     }
+  }
+
+  // Элита получает тонкую яркую оболочку поверх тела.
+  if (cfg.elite) {
+    const eliteRing = scene.add
+      .circle(0, 0, cfg.radius + 7, 0x000000, 0)
+      .setStrokeStyle(2, cfg.lightStrokeColor, 0.9)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    container.add(eliteRing);
   }
 
   return { container, bodyShape, eyes, glow, hpBar, hpBarBack };

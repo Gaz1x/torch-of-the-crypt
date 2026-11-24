@@ -17,9 +17,183 @@ export function createBossVisual(
   // Босс остаётся видимым даже вне круга света: иначе его атаки читаются хуже.
   const container = scene.add.container(x, y).setDepth(21);
   const eyes: Phaser.GameObjects.Arc[] = [];
+  let glow: Phaser.GameObjects.Arc | undefined;
 
   // Пока босс один, но switch оставляет место для следующего.
   switch (key) {
+    case 'PALE_WARDEN': {
+      // Бледный Часовой: высокий силуэт в капюшоне с ледяным фонарём.
+      const aura = scene.add.circle(0, 0, cfg.radius + 18, 0x0b1420, 0.4);
+      const frostHalo = scene.add
+        .circle(0, 0, cfg.radius + 30, cfg.lightStrokeColor, 0.1)
+        .setBlendMode(Phaser.BlendModes.ADD);
+
+      const cowl = scene.add.polygon(
+        -10,
+        0,
+        [
+          [6, -cfg.radius - 14],
+          [-cfg.radius - 6, -cfg.radius * 0.55],
+          [-cfg.radius + 2, 0],
+          [-cfg.radius - 6, cfg.radius * 0.55],
+          [6, cfg.radius + 14],
+        ],
+        0x0f2438
+      ).setOrigin(0).setStrokeStyle(2, cfg.strokeColor, 0.9);
+
+      const bodyShape = scene.add.circle(0, 0, cfg.radius, cfg.bodyColor)
+        .setStrokeStyle(4, cfg.strokeColor);
+      const bodyHighlight = scene.add.circle(-8, -9, cfg.radius * 0.7, 0x1e3a5f, 0.35);
+
+      // Плечевые пластины.
+      const plateTop = scene.add.polygon(4, -cfg.radius + 10, [0, 0, 26, -14, 12, 8], 0x1e3a5f)
+        .setOrigin(0);
+      const plateBottom = scene.add.polygon(4, cfg.radius - 10, [0, 0, 26, 14, 12, -8], 0x1e3a5f)
+        .setOrigin(0);
+
+      // Ледяной фонарь вместо глаз.
+      const lanternGlow = scene.add
+        .circle(18, 0, 26, cfg.eyeColor, 0.18)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      const lantern = scene.add.circle(18, 0, 12, cfg.eyeColor, 0.85);
+      const lanternCore = scene.add.circle(18, 0, 6, 0xf0f9ff, 1);
+      glow = scene.add.circle(18, 0, 18, cfg.eyeColor, 0.25);
+
+      // Ледяные осколки вокруг тела.
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI * 2 * i) / 6;
+        const shard = scene.add
+          .polygon(
+            Math.cos(angle) * (cfg.radius + 10),
+            Math.sin(angle) * (cfg.radius + 10),
+            [0, -7, 5, 0, 0, 7, -5, 0],
+            cfg.lightStrokeColor,
+            0.55
+          )
+          .setOrigin(0);
+        container.add(shard);
+        scene.tweens.add({
+          targets: shard,
+          alpha: 0.15,
+          duration: 900 + i * 140,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        });
+      }
+
+      container.add([
+        frostHalo,
+        aura,
+        cowl,
+        plateTop,
+        plateBottom,
+        bodyShape,
+        bodyHighlight,
+        lanternGlow,
+        glow,
+        lantern,
+        lanternCore,
+      ]);
+
+      scene.tweens.add({
+        targets: [lanternGlow, glow],
+        scale: 1.15,
+        alpha: 0.12,
+        duration: 1100,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+
+      return { container, bodyShape, eyes, glow };
+    }
+
+    case 'ROT_MOTHER': {
+      // Мать Роя: вздутое тело, россыпь глаз и поднимающиеся споры.
+      const aura = scene.add.circle(0, 0, cfg.radius + 20, 0x0a1a0f, 0.42);
+      const sporeHalo = scene.add
+        .circle(0, 0, cfg.radius + 34, cfg.eyeColor, 0.1)
+        .setBlendMode(Phaser.BlendModes.ADD);
+
+      const bodyShape = scene.add.circle(0, 0, cfg.radius, cfg.bodyColor)
+        .setStrokeStyle(4, cfg.strokeColor);
+
+      // Неровная «плоть»: несколько полупрозрачных кругов поверх тела.
+      const lumps = scene.add.graphics();
+      lumps.fillStyle(0x14301a, 0.7);
+      lumps.fillCircle(-10, -12, cfg.radius * 0.42);
+      lumps.fillCircle(12, 10, cfg.radius * 0.36);
+      lumps.fillCircle(-4, 14, cfg.radius * 0.3);
+
+      // Россыпь глаз.
+      const extraEyes: Phaser.GameObjects.Arc[] = [];
+      for (let i = 0; i < 7; i++) {
+        const angle = (Math.PI * 2 * i) / 7 + 0.3;
+        const distance = cfg.radius * 0.5;
+        const eye = scene.add
+          .circle(
+            Math.cos(angle) * distance,
+            Math.sin(angle) * distance,
+            i % 2 === 0 ? 4 : 3,
+            cfg.eyeColor,
+            0.9
+          );
+        eyes.push(eye);
+        extraEyes.push(eye);
+      }
+
+      // Споры, поднимающиеся от тела.
+      const spores: Phaser.GameObjects.Arc[] = [];
+      for (let i = 0; i < 7; i++) {
+        const angle = (Math.PI * 2 * i) / 7 + 0.5;
+        const spore = scene.add
+          .circle(
+            Math.cos(angle) * (cfg.radius + 4),
+            Math.sin(angle) * (cfg.radius + 4),
+            2.6,
+            cfg.lightStrokeColor,
+            0.7
+          )
+          .setBlendMode(Phaser.BlendModes.ADD);
+        spores.push(spore);
+        scene.tweens.add({
+          targets: spore,
+          y: spore.y - 34,
+          alpha: 0,
+          duration: 1700 + i * 200,
+          repeat: -1,
+          ease: 'Sine.easeOut',
+        });
+      }
+
+      const core = scene.add.circle(0, 0, 13, cfg.eyeColor, 0.5);
+      glow = scene.add.circle(0, 0, 7, cfg.lightStrokeColor, 0.9);
+
+      container.add([
+        sporeHalo,
+        aura,
+        bodyShape,
+        lumps,
+        ...spores,
+        ...extraEyes,
+        core,
+        glow,
+      ]);
+
+      scene.tweens.add({
+        targets: [sporeHalo, core, glow],
+        scale: 1.1,
+        alpha: 0.35,
+        duration: 950,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+
+      return { container, bodyShape, eyes, glow };
+    }
+
     case 'FLAME_EATER':
     default: {
       const aura = scene.add.circle(0, 0, cfg.radius + 16, 0x450a0a, 0.35);

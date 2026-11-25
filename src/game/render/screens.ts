@@ -5,6 +5,7 @@ import {
   type RankResult,
 } from '../core/profile';
 import { DEFAULT_SETTINGS, type GameSettings } from '../core/settings';
+import { track } from '../core/analytics';
 import type { BoonDefinition, BoonKey } from '../core/boons';
 import {
   getUpgradeCost,
@@ -35,7 +36,7 @@ import {
 const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
 
 /** На сенсорных экранах подсказки про клавиши заменяются на жесты. */
-function isTouchUi(): boolean {
+export function isTouchUi(): boolean {
   return typeof window.matchMedia === 'function'
     ? window.matchMedia('(pointer: coarse)').matches
     : false;
@@ -44,6 +45,32 @@ function isTouchUi(): boolean {
 /** «II / III» — этап, на котором закончился спуск. */
 function formatFloor(floor: number): string {
   return `${FLOOR_ROMAN[floor - 1] ?? 'I'} / ${FLOOR_ROMAN[FLOOR_ROMAN.length - 1]}`;
+}
+
+/**
+ * Жирный шеврон для кнопок листания локаций.
+ * Типографские «‹ ›» были слишком тонкими для остального интерфейса,
+ * поэтому стрелка рисуется геометрией. direction: -1 — влево, 1 — вправо.
+ */
+function createChevron(scene: Phaser.Scene, direction: number): Phaser.GameObjects.Graphics {
+  const graphics = scene.add.graphics();
+  const back = -direction * 4;
+  const tip = direction * 4;
+  graphics.lineStyle(3, UI_COLORS.brassBright, 1);
+  graphics.beginPath();
+  graphics.moveTo(back, -7);
+  graphics.lineTo(tip, 0);
+  graphics.lineTo(back, 7);
+  graphics.strokePath();
+  return graphics;
+}
+
+/** Лучшее время локации: «—», секунды или «м:сс». */
+function formatRunTime(seconds: number): string {
+  if (seconds <= 0) return '—';
+  if (seconds < 60) return `${Math.round(seconds)}с`;
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
 /** Статистика, показываемая на экране победы или поражения. */
@@ -622,10 +649,19 @@ function createUpgradesModal(
   };
 
   function handleBuy(key: UpgradeKey): void {
+    // Данные «до покупки» нужны для события Метрики: какой уровень куплен и за сколько.
+    const before = controller.getProfile();
+    const cost = getUpgradeCost(key, before.upgrades[key]);
     const result = controller.buyUpgrade(key);
     statusText.setText(result.message);
     statusText.setColor(result.ok ? '#fbbf24' : '#fca5a5');
     if (result.ok) {
+      track('upgrade_buy', {
+        key,
+        level: before.upgrades[key] + 1,
+        cost: cost ?? 0,
+        echo_left: controller.getProfile().echo,
+      });
       onProfileChanged();
       refresh();
     }
@@ -641,6 +677,7 @@ function createUpgradesModal(
   screen.add(modal);
 
   const open = (): void => {
+    track('upgrades_opened', { echo: controller.getProfile().echo });
     statusText.setText('');
     statusText.setColor('#94a3b8');
     refresh();
@@ -774,6 +811,8 @@ export function drawStartScreen(
         duration: 340,
         ease: 'Quad.easeIn',
         onComplete: () => {
+          // Экран мог уйти, пока твин доходил: текст уже уничтожен.
+          if (!sloganText.active) return;
           sloganIndex = (sloganIndex + 1) % START_SLOGANS.length;
           sloganText.setText(`— ${START_SLOGANS[sloganIndex]}`);
           scene.tweens.add({
@@ -810,7 +849,7 @@ export function drawStartScreen(
   let selectedLevel = Phaser.Math.Clamp(levelSelect.index, 0, Math.max(0, levelSelect.levels.length - 1));
   const levelLabel = scene.add.text(menuX, 196, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '11px',
+    fontSize: '10px',
     fontStyle: 'bold',
     color: '#f0c674',
     letterSpacing: 1,
@@ -832,23 +871,26 @@ export function drawStartScreen(
     selectedLevel = (selectedLevel + direction + count) % count;
     levelSelect.onChange(selectedLevel);
     renderLevel();
+    refreshStats();
   };
 
-  const levelPrev = createButton(scene, 834, 196, 40, 30, '‹', {
+  // Стрелки стоят внутри колонки кнопок (840…1160 = menuX ± 160), чтобы край
+  // ряда совпадал с «СПУСТИТЬСЯ», а не выступал за него, как раньше.
+  const levelPrev = createButton(scene, 858, 196, 36, 32, '', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => cycleLevel(-1),
-    fontSize: 18,
   });
+  levelPrev.container.add(createChevron(scene, -1));
 
-  const levelNext = createButton(scene, 1166, 196, 40, 30, '›', {
+  const levelNext = createButton(scene, 1142, 196, 36, 32, '', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => cycleLevel(1),
-    fontSize: 18,
   });
+  levelNext.container.add(createChevron(scene, 1));
 
   renderLevel();
 
@@ -875,7 +917,9 @@ export function drawStartScreen(
   });
 
   // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
-  const statsPanel = createPanel(scene, 840, 500, 320, 124, UI_COLORS.brass, {
+  // Панель на 132 вместо 124: две строки итогов должны целиком помещаться
+  // внутрь рамки, а не съезжать на её нижний край.
+  const statsPanel = createPanel(scene, 840, 500, 320, 132, UI_COLORS.brass, {
     alpha: 0.96,
   });
 
@@ -886,7 +930,6 @@ export function drawStartScreen(
     color: '#7c8ba1',
     letterSpacing: 2,
   }).setOrigin(0.5);
-
   const statsDivider = createDivider(scene, 1000, 530, 260, UI_COLORS.brass);
 
   const echoIcon = createIcon(scene, 886, 558, 'crystal', 20, UI_COLORS.mana);
@@ -921,18 +964,28 @@ export function drawStartScreen(
     letterSpacing: 2,
   }).setOrigin(0.5);
 
-  const statsSummary = scene.add.text(1000, 610, '', {
+  // Две строки итогов центрируются по панели и не выходят за её нижнюю
+  // границу: раньше текст стоял по левому краю с началом у 606 и налезал
+  // на рамку.
+  const statsSummary = scene.add.text(1000, 606, '', {
     fontFamily: UI_FONT.body,
     fontSize: '10px',
     color: '#94a3b8',
+    lineSpacing: 4,
   }).setOrigin(0.5);
 
   const refreshStats = (): void => {
     const profile = profileController.getProfile();
+    const levelStats = profile.levelStats[selectedLevel] ?? profile.levelStats[0];
+    const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
+
     echoValue.setText(`${profile.echo}`);
-    rankValue.setText(profile.bestRank ?? '—');
+    // Медалка и строки под ней — рекорды выбранной локации.
+    rankValue.setText(levelStats.bestRank ?? '—');
+    statsHeader.setText(`ХРОНИКА СТРАЖА · ЛОКАЦИЯ ${roman}`);
     statsSummary.setText(
-      `Спуски ${profile.runs} · Победы ${profile.victories} · Лучший счёт ${profile.bestScore}`
+      `Лучший счёт ${levelStats.bestScore} · Время ${formatRunTime(levelStats.bestTime)}\n` +
+        `Спуски ${levelStats.runs} · Победы ${levelStats.victories}`
     );
   };
   refreshStats();

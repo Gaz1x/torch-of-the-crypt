@@ -40,6 +40,15 @@ export const RANK_THRESHOLDS = {
 export const PROFILE_STORAGE_KEY = 'torch-of-the-crypt:profile:v1';
 export const PROFILE_VERSION = 1;
 
+/** Рекорды одной локации: считаются отдельно от общих итогов. */
+export interface LevelStats {
+  runs: number;
+  victories: number;
+  bestScore: number;
+  bestTime: number;
+  bestRank: RankLetter | null;
+}
+
 export interface Profile {
   version: number;
   /** Текущее Эхо — валюта улучшений. */
@@ -55,7 +64,17 @@ export interface Profile {
   upgrades: UpgradeLevels;
   /** Сколько локаций открыто: 1 — только первая. */
   unlockedLevels: number;
+  /** Рекорды по каждой локации, индекс совпадает с LEVELS. */
+  levelStats: LevelStats[];
 }
+
+export const DEFAULT_LEVEL_STATS: LevelStats = {
+  runs: 0,
+  victories: 0,
+  bestScore: 0,
+  bestTime: 0,
+  bestRank: null,
+};
 
 export const DEFAULT_PROFILE: Profile = {
   version: PROFILE_VERSION,
@@ -68,6 +87,7 @@ export const DEFAULT_PROFILE: Profile = {
   bestRank: null,
   upgrades: { ...DEFAULT_UPGRADES },
   unlockedLevels: 1,
+  levelStats: LEVELS.map(() => ({ ...DEFAULT_LEVEL_STATS })),
 };
 
 export function calculateRank(stats: RankStats): RankResult {
@@ -129,6 +149,17 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
   const newBestTime = run.survivalTime > profile.bestTime;
   const newBestRank = rankWeight(run.rank) > rankWeight(profile.bestRank);
 
+  const nextLevelStats = profile.levelStats.map((stats, index) => {
+    if (index !== run.levelIndex) return stats;
+    return {
+      runs: stats.runs + 1,
+      victories: stats.victories + (run.victory ? 1 : 0),
+      bestScore: Math.max(stats.bestScore, run.score),
+      bestTime: Math.max(stats.bestTime, run.survivalTime),
+      bestRank: rankWeight(run.rank) > rankWeight(stats.bestRank) ? run.rank : stats.bestRank,
+    };
+  });
+
   const next: Profile = {
     ...profile,
     echo: profile.echo + echoGained,
@@ -145,6 +176,7 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
         ? Math.max(profile.unlockedLevels, run.levelIndex + 2)
         : profile.unlockedLevels
     ),
+    levelStats: nextLevelStats,
   };
 
   return { profile: next, echoGained, newBestScore, newBestTime, newBestRank };
@@ -209,8 +241,35 @@ function sanitizeUpgrades(raw: unknown): UpgradeLevels {
   return result;
 }
 
+function sanitizeLevelStats(raw: unknown): LevelStats[] {
+  const data = Array.isArray(raw) ? raw : [];
+  return LEVELS.map((_, index) => {
+    const entry = data[index];
+    const stats = typeof entry === 'object' && entry !== null
+      ? (entry as Partial<Record<keyof LevelStats, unknown>>)
+      : {};
+    return {
+      runs: toSafeInt(stats.runs),
+      victories: toSafeInt(stats.victories),
+      bestScore: toSafeInt(stats.bestScore),
+      bestTime: typeof stats.bestTime === 'number' && Number.isFinite(stats.bestTime)
+        ? Math.max(0, stats.bestTime)
+        : 0,
+      bestRank: sanitizeRank(stats.bestRank),
+    };
+  });
+}
+
+function emptyProfile(): Profile {
+  return {
+    ...DEFAULT_PROFILE,
+    upgrades: { ...DEFAULT_UPGRADES },
+    levelStats: DEFAULT_PROFILE.levelStats.map((stats) => ({ ...stats })),
+  };
+}
+
 function sanitizeProfile(raw: unknown): Profile {
-  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_PROFILE, upgrades: { ...DEFAULT_UPGRADES } };
+  if (typeof raw !== 'object' || raw === null) return emptyProfile();
 
   const data = raw as Partial<Record<keyof Profile, unknown>>;
   return {
@@ -226,16 +285,17 @@ function sanitizeProfile(raw: unknown): Profile {
     bestRank: sanitizeRank(data.bestRank),
     upgrades: sanitizeUpgrades(data.upgrades),
     unlockedLevels: Math.min(LEVELS.length, Math.max(1, toSafeInt(data.unlockedLevels, 1))),
+    levelStats: sanitizeLevelStats(data.levelStats),
   };
 }
 
 export function loadProfile(): Profile {
   try {
     const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_PROFILE, upgrades: { ...DEFAULT_UPGRADES } };
+    if (!raw) return emptyProfile();
     return sanitizeProfile(JSON.parse(raw));
   } catch {
-    return { ...DEFAULT_PROFILE, upgrades: { ...DEFAULT_UPGRADES } };
+    return emptyProfile();
   }
 }
 

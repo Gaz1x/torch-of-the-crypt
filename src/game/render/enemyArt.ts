@@ -209,10 +209,6 @@ export function createEnemyVisual(
       const e2 = createEye(scene, 10, 7, 3.5, cfg.eyeColor);
       eyes.push(e1.eye, e2.eye);
 
-      const bar = createHpBar(scene, 34);
-      hpBar = bar.hpBar;
-      hpBarBack = bar.hpBarBack;
-
       container.add([
         shadowAura,
         hornLeft,
@@ -269,10 +265,6 @@ export function createEnemyVisual(
       const e1 = createEye(scene, 5, -4, 2.2, cfg.eyeColor);
       const e2 = createEye(scene, 5, 4, 2.2, cfg.eyeColor);
       eyes.push(e1.eye, e2.eye);
-
-      const bar = createHpBar(scene, 30);
-      hpBar = bar.hpBar;
-      hpBarBack = bar.hpBarBack;
 
       container.add([
         shadowAura,
@@ -350,10 +342,6 @@ export function createEnemyVisual(
       const e2 = createEye(scene, 7, 5, 2.2, cfg.eyeColor);
       eyes.push(e1.eye, e2.eye);
 
-      const bar = createHpBar(scene, 32);
-      hpBar = bar.hpBar;
-      hpBarBack = bar.hpBarBack;
-
       container.add([
         shadowAura,
         spikes,
@@ -407,6 +395,15 @@ export function createEnemyVisual(
       ]);
       break;
     }
+  }
+
+  // Полоска здоровья нужна всем, у кого запас больше одного удара:
+  // по ней видно, что попадание засчитано (см. GameScene.updateEnemies).
+  if (cfg.hp > 1) {
+    const barWidth = Phaser.Math.Clamp(Math.round(cfg.radius * 2), 24, 40);
+    const bar = createHpBar(scene, barWidth);
+    hpBar = bar.hpBar;
+    hpBarBack = bar.hpBarBack;
   }
 
   // Элита получает тонкую яркую оболочку поверх тела.

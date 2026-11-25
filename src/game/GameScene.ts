@@ -14,6 +14,7 @@ import {
   type Profile,
 } from './core/profile';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
+import { startAttempt, track } from './core/analytics';
 import {
   getUpgradeBonuses,
   type UpgradeKey,
@@ -50,6 +51,7 @@ import {
   drawPauseScreen,
   drawStartScreen,
   drawVictoryScreen,
+  isTouchUi,
   showBoonChoice,
   type GameOverStats,
   type ProfileController,
@@ -79,6 +81,14 @@ type GameState = 'START' | 'PLAYING' | 'PAUSED' | 'GIFT' | 'GAMEOVER' | 'VICTORY
 /** Римские номера этажей для строки HUD. */
 const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
 
+// Покачивание фигуры рыцаря при ходьбе (см. updateFigureAnimation).
+const WALK_BOB_AMPLITUDE = 2.2;
+const WALK_SWAY_AMPLITUDE = 0.05;
+const WALK_LEAN_FACTOR = 0.35;
+const IDLE_BREATH_AMPLITUDE = 1;
+/** Сколько секунд между двумя облачками пыли под ногами. */
+const STEP_DUST_INTERVAL = 0.22;
+
 /** BaseSound в типах Phaser не объявляет setVolume, хотя все реальные звуки его имеют. */
 type VolumeControlledSound = Phaser.Sound.BaseSound & {
   setVolume(value: number): unknown;
@@ -98,6 +108,9 @@ export class GameScene extends Phaser.Scene {
   private hp: number = GAME_CONFIG.PLAYER.MAX_HP;
   private mana: number = GAME_CONFIG.COMBAT.START_MANA;
   private invulnTimer = 0;
+  /** Часы анимации фигуры и таймер пыли шагов. */
+  private figureAnimTime = 0;
+  private stepDustTimer = 0;
 
   // Постоянный прогресс и рассчитанные из улучшений характеристики
   private profile: Profile = loadProfile();
@@ -146,6 +159,14 @@ export class GameScene extends Phaser.Scene {
   private bossAddsTimer = 0;
   /** Дары, выбранные в этом спуске. Живут только до конца партии. */
   private boons = new Set<BoonKey>();
+
+  // Аналитика (Метрика): номер попытки в визите и глубина текущего спуска.
+  /** Номер попытки с момента загрузки страницы (1, 2, 3…). */
+  private runAttempt = 0;
+  /** Самый глубокий этаж текущего спуска, чтобы floor_reached не повторялся. */
+  private maxFloorReached = 1;
+  /** game_ready отправляется один раз за визит — при первом показе лагеря. */
+  private campTracked = false;
 
   /** Текущая локация: её этажи и волны. */
   private get level(): LevelConfig {
@@ -374,6 +395,8 @@ export class GameScene extends Phaser.Scene {
       if (this.gameState === 'START') {
         this.player.setRotation(Math.sin(time * 0.0008) * 0.4);
       }
+      // Вне боя фигура просто дышит, без пыли и наклонов.
+      this.updateFigureAnimation(dt, 0, 0);
       this.player.setAlpha(1);
       this.invulnRing.setVisible(false);
       this.lowHpVignette.setVisible(false);
@@ -701,6 +724,8 @@ export class GameScene extends Phaser.Scene {
     this.playerVisual.shadow.setPosition(this.playerX + 2, this.playerY + 13);
     this.ambientGlow.setPosition(this.playerX, this.playerY);
 
+    this.updateFigureAnimation(dt, vx, vy);
+
     if (this.touchAimPointerId !== null && this.touchAimAngle !== null) {
       this.aimAngle = this.touchAimAngle;
     } else if (!this.isTouchDevice) {
@@ -709,6 +734,54 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.player.setRotation(this.aimAngle);
+  }
+
+  /**
+   * Живая фигура рыцаря: при движении корпус пружинит и наклоняется в
+   * сторону шага, в покое — медленно дышит. Пыль выбрасывается шагами.
+   */
+  private updateFigureAnimation(dt: number, vx: number, vy: number): void {
+    const figure = this.playerVisual.figure;
+    const moving = vx !== 0 || vy !== 0;
+    this.figureAnimTime += dt;
+
+    if (moving) {
+      // Две пульсации в секунду: корпус подпрыгивает, плечи покачиваются.
+      const phase = this.figureAnimTime * Math.PI * 2 * 2;
+      figure.y = Math.sin(phase) * WALK_BOB_AMPLITUDE;
+      figure.rotation = Math.sin(phase) * WALK_SWAY_AMPLITUDE;
+
+      // Наклон в сторону движения: локальный поворот фигуры плюс прицел.
+      const moveAngle = Math.atan2(vy, vx);
+      figure.rotation += Phaser.Math.Angle.Wrap(moveAngle - this.aimAngle) * WALK_LEAN_FACTOR;
+
+      this.stepDustTimer -= dt;
+      if (this.stepDustTimer <= 0) {
+        this.stepDustTimer = STEP_DUST_INTERVAL;
+        this.spawnStepDust();
+      }
+    } else {
+      this.stepDustTimer = 0;
+      figure.y = Math.sin(this.figureAnimTime * Math.PI * 2 * 0.35) * IDLE_BREATH_AMPLITUDE;
+      figure.rotation = Phaser.Math.Linear(figure.rotation, 0, Math.min(1, dt * 8));
+    }
+  }
+
+  /** Облачко пыли под ногами: маленький круг растёт и растворяется. */
+  private spawnStepDust(): void {
+    const dust = this.add
+      .circle(this.playerX, this.playerY + 14, 6, 0x94a3b8, 0.35)
+      .setDepth(11.5);
+
+    this.tweens.add({
+      targets: dust,
+      y: dust.y + 8,
+      scale: 1.9,
+      alpha: 0,
+      duration: 420,
+      ease: 'Quad.easeOut',
+      onComplete: () => dust.destroy(),
+    });
   }
 
   private handleShooting(dt: number): void {
@@ -966,6 +1039,26 @@ export class GameScene extends Phaser.Scene {
     if (!wave) return;
 
     this.waveIndex = index;
+
+    // Метрика: первый заход на этаж и выход босса.
+    const floor = getFloorIndex(this.level, index) + 1;
+    if (floor > this.maxFloorReached) {
+      this.maxFloorReached = floor;
+      if (floor > 1) {
+        track('floor_reached', {
+          floor,
+          location: this.levelIndex + 1,
+          attempt: this.runAttempt,
+        });
+      }
+    }
+    if (wave.boss) {
+      track('boss_reached', {
+        location: this.levelIndex + 1,
+        attempt: this.runAttempt,
+      });
+    }
+
     this.waveSpawned = 0;
     this.waveSpawnTimer = 1;
     this.waveTransitionTimer = 0;
@@ -1015,12 +1108,22 @@ export class GameScene extends Phaser.Scene {
   /** Выбор дара после этажа: игра замирает до клика по карточке. */
   private showGiftChoice(): void {
     this.gameState = 'GIFT';
-    showBoonChoice(this, this.uiOverlay, pickBoonChoices(this.boons), (key) =>
-      this.takeBoon(key)
-    );
+    const choices = pickBoonChoices(this.boons);
+    // Метрика: какие карточки предложили — чтобы считать долю выбора каждой.
+    track('boon_offer', {
+      floor: getFloorIndex(this.level, this.waveIndex) + 1,
+      cards: choices.map((boon) => boon.key).join(','),
+      attempt: this.runAttempt,
+    });
+    showBoonChoice(this, this.uiOverlay, choices, (key) => this.takeBoon(key));
   }
 
   private takeBoon(key: BoonKey): void {
+    track('boon_pick', {
+      boon: key,
+      floor: getFloorIndex(this.level, this.waveIndex) + 1,
+      attempt: this.runAttempt,
+    });
     this.boons.add(key);
 
     // Стойкость повышает запас сразу, остальные дары читаются в бою.
@@ -1751,6 +1854,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showStartScreen(): void {
+    // Первый показ лагеря за визит — точка «игра загрузилась до меню».
+    if (!this.campTracked) {
+      this.campTracked = true;
+      track('game_ready');
+    }
+
     this.gameState = 'START';
     clearAllNotices(this);
     this.hud.container.setVisible(false);
@@ -1818,6 +1927,13 @@ export class GameScene extends Phaser.Scene {
   /** Сбрасывает партию и запускает первую волну выбранной локации. */
   private beginRun(): void {
     this.levelIndex = this.selectedLevel;
+    this.runAttempt = startAttempt();
+    this.maxFloorReached = 1;
+    track('run_start', {
+      location: this.levelIndex + 1,
+      attempt: this.runAttempt,
+      control: isTouchUi() ? 'touch' : 'keyboard',
+    });
     this.clearField();
     this.resetPlayerPosition();
     this.applyProfileBonuses();
@@ -1922,6 +2038,17 @@ export class GameScene extends Phaser.Scene {
     stats.newlyUnlockedLevel =
       this.profile.unlockedLevels > unlockedBefore ? this.profile.unlockedLevels : null;
 
+    track('run_end', {
+      result: victory ? 'victory' : 'death',
+      location: this.levelIndex + 1,
+      attempt: this.runAttempt,
+      max_floor: stats.floor,
+      max_wave: stats.wave,
+      duration: Math.round(stats.survivalTime),
+      score: stats.score,
+      kills: stats.killsCount,
+    });
+
     return stats;
   }
 
@@ -1942,7 +2069,10 @@ export class GameScene extends Phaser.Scene {
       this,
       this.uiOverlay,
       this.finishRun(false),
-      () => this.startGame(),
+      () => {
+        track('retry_click', { after: 'death', location: this.levelIndex + 1 });
+        this.startGame();
+      },
       () => this.showStartScreen()
     );
   }
@@ -1970,7 +2100,10 @@ export class GameScene extends Phaser.Scene {
       this,
       this.uiOverlay,
       stats,
-      () => this.startGame(),
+      () => {
+        track('retry_click', { after: 'victory', location: this.levelIndex + 1 });
+        this.startGame();
+      },
       () => this.showStartScreen()
     );
   }
@@ -1999,7 +2132,22 @@ export class GameScene extends Phaser.Scene {
       this.buildStats(false),
       () => this.resumeGame(),
       () => this.startGame(),
-      () => this.showStartScreen(),
+      () => {
+        // Пауза → лагерь: забег брошен, это отдельный исход для статистики.
+        if (!this.runRecorded) {
+          track('run_end', {
+            result: 'abandoned',
+            location: this.levelIndex + 1,
+            attempt: this.runAttempt,
+            max_floor: getFloorIndex(this.level, this.waveIndex) + 1,
+            max_wave: this.waveIndex + 1,
+            duration: Math.round(this.survivalTime),
+            score: this.score,
+            kills: this.killsCount,
+          });
+        }
+        this.showStartScreen();
+      },
       this.getSettingsController()
     );
   }

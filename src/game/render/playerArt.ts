@@ -33,6 +33,8 @@ const BRASS = 0xb08a4a;
 
 export interface PlayerVisual {
   container: Phaser.GameObjects.Container;
+  /** Внутренняя фигура: её можно качать и наклонять, не трогая позицию. */
+  figure: Phaser.GameObjects.Container;
   /** Лежит на сцене отдельно от контейнера и не вращается. */
   shadow: Phaser.GameObjects.Ellipse;
   torchFlameOuter: Phaser.GameObjects.Arc;
@@ -43,6 +45,8 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
   const shadow = scene.add.ellipse(x + 2, y + 13, 30, 13, 0x03060b, 0.38).setDepth(11);
 
   const container = scene.add.container(x, y).setDepth(12);
+  // Всё тело живёт во внутреннем контейнере: GameScene его качает при ходьбе.
+  const figure = scene.add.container(0, 0);
 
   // 1. Плащ: внешний слой темнее, внутренний — алый, плюс линии складок.
   // setOrigin(0): точки Polygon рисуются минус displayOrigin (origin * размер).
@@ -100,7 +104,7 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
   const visorH = scene.add.rectangle(5, 0, 3, 8, 0x0f172a);
   const visorCyanGlow = scene.add.rectangle(6, 0, 1.5, 5, 0x38bdf8);
 
-  container.add([
+  figure.add([
     cloakBack,
     cloakFront,
     folds,
@@ -126,6 +130,8 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
     visorCyanGlow,
   ]);
 
+  container.add(figure);
+
   // Камень посоха дышит, пламя факела мерцает.
   scene.tweens.add({
     targets: [staffGemGlow, staffGem],
@@ -146,5 +152,5 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
     ease: 'Sine.easeInOut',
   });
 
-  return { container, shadow, torchFlameOuter, torchFlameCore };
+  return { container, figure, shadow, torchFlameOuter, torchFlameCore };
 }

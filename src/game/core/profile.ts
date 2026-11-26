@@ -7,11 +7,13 @@
 
 import {
   DEFAULT_UPGRADES,
+  getUpgradeBonuses,
   getUpgradeCost,
   UPGRADES,
   type UpgradeKey,
   type UpgradeLevels,
 } from './upgrades';
+import { getMastery } from './mastery';
 import { LEVELS } from './waves';
 
 export type RankLetter = 'S' | 'A' | 'B';
@@ -117,10 +119,17 @@ export function rankWeight(letter: RankLetter | null): number {
 /**
  * Эхо за спуск: очки / 2 + 20 за каждого убитого босса.
  * Победа приносит полную награду, смерть — половину (с округлением вниз).
+ * Множитель складывается из улучшения «Щедрая тьма» и мастерства локации.
  */
-export function calculateEcho(score: number, bossesKilled: number, victory: boolean): number {
+export function calculateEcho(
+  score: number,
+  bossesKilled: number,
+  victory: boolean,
+  multiplier = 1
+): number {
   const base = Math.max(0, score) / 2 + Math.max(0, bossesKilled) * 20;
-  return Math.floor(victory ? base : base * 0.5);
+  const reward = victory ? base : base * 0.5;
+  return Math.floor(reward * Math.max(1, multiplier));
 }
 
 export interface RunSummary {
@@ -137,6 +146,8 @@ export interface RunSummary {
 export interface RunReward {
   profile: Profile;
   echoGained: number;
+  /** Общий множитель Эха: «Щедрая тьма» × мастерство локации. */
+  echoMultiplier: number;
   newBestScore: boolean;
   newBestTime: boolean;
   newBestRank: boolean;
@@ -144,7 +155,11 @@ export interface RunReward {
 
 /** Записывает результат забега в профиль и начисляет Эхо. */
 export function applyRun(profile: Profile, run: RunSummary): RunReward {
-  const echoGained = calculateEcho(run.score, run.bossesKilled, run.victory);
+  // Улучшение «Щедрая тьма» и мастерство локации умножают добычу.
+  const bonuses = getUpgradeBonuses(profile.upgrades);
+  const levelVictories = profile.levelStats[run.levelIndex]?.victories ?? 0;
+  const echoMultiplier = bonuses.echoMultiplier * getMastery(levelVictories).echoMultiplier;
+  const echoGained = calculateEcho(run.score, run.bossesKilled, run.victory, echoMultiplier);
   const newBestScore = run.score > profile.bestScore;
   const newBestTime = run.survivalTime > profile.bestTime;
   const newBestRank = rankWeight(run.rank) > rankWeight(profile.bestRank);
@@ -179,7 +194,7 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
     levelStats: nextLevelStats,
   };
 
-  return { profile: next, echoGained, newBestScore, newBestTime, newBestRank };
+  return { profile: next, echoGained, echoMultiplier, newBestScore, newBestTime, newBestRank };
 }
 
 export interface UpgradePurchase {

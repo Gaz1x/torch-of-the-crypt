@@ -79,9 +79,11 @@ export const GAME_CONFIG = {
     /** Пауза между касаниями одного врага, чтобы он не бил каждый кадр. */
     MELEE_CONTACT_COOLDOWN: 1.2,
     /** Слабый автоприцел на телефоне: конус доводки (радианы). */
-    TOUCH_AIM_ASSIST_ANGLE: 0.17,
+    TOUCH_AIM_ASSIST_ANGLE: 0.1,
     /** Доля угла, на которую снаряд дотягивается к врагу внутри конуса. */
-    TOUCH_AIM_ASSIST_STRENGTH: 0.6,
+    TOUCH_AIM_ASSIST_STRENGTH: 0.3,
+    /** Дальше этого расстояния автоприцел не ищет цели (пиксели). */
+    TOUCH_AIM_ASSIST_RANGE: 420,
   },
   MANA_ORB: {
     MAGNET_RADIUS: 150,

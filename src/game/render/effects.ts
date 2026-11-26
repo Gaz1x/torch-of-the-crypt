@@ -493,3 +493,22 @@ export function showPhaseNotice(
     phase,
   });
 }
+
+/**
+ * Дар мастерства на старте спуска. Идёт через общую очередь уведомлений,
+ * поэтому не спорит с плашкой волны: карточка появится после неё.
+ */
+export function showMasteryNotice(
+  scene: Phaser.Scene,
+  boonName: string,
+  effect: string
+): void {
+  enqueueNotice(scene, {
+    kind: 'phase',
+    title: 'ДАР МАСТЕРСТВА',
+    badge: 'МАСТЕРСТВО',
+    detail: `${boonName} · ${effect}`,
+    accent: UI_COLORS.emberBright,
+    duration: 2400,
+  });
+}

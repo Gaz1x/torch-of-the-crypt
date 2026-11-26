@@ -4,7 +4,7 @@ import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameCon
 import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
 import { LEVELS, getFloorIndex, isFloorEnd, type LevelConfig, type WaveConfig } from './core/waves';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
-import { pickBoonChoices, type BoonKey } from './core/boons';
+import { pickBoonChoices, BOON_ORDER, BOONS, type BoonKey } from './core/boons';
 import {
   applyRun,
   calculateRank,
@@ -13,6 +13,7 @@ import {
   saveProfile,
   type Profile,
 } from './core/profile';
+import { getMastery } from './core/mastery';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
 import { startAttempt, track } from './core/analytics';
 import {
@@ -37,6 +38,7 @@ import {
   createHitSpark,
   createShotFlash,
   showFloatingText,
+  showMasteryNotice,
   showPhaseNotice,
   showWaveNotice,
 } from './render/effects';
@@ -117,6 +119,8 @@ export class GameScene extends Phaser.Scene {
   private maxHp: number = GAME_CONFIG.PLAYER.MAX_HP;
   private startMana: number = GAME_CONFIG.COMBAT.START_MANA;
   private lightMultiplier = 1;
+  /** Множитель перезарядки из улучшения «Быстрая рука». */
+  private cooldownMultiplier = 1;
   /** Защита от повторной записи одного и того же забега. */
   private runRecorded = false;
 
@@ -356,12 +360,14 @@ export class GameScene extends Phaser.Scene {
     return controller;
   }
 
-  /** Пересчитывает характеристики стража из купленных улучшений. */
+  /** Пересчитывает характеристики стража из улучшений и мастерства локации. */
   private applyProfileBonuses(): void {
     const bonuses = getUpgradeBonuses(this.profile.upgrades);
-    this.maxHp = GAME_CONFIG.PLAYER.MAX_HP + bonuses.maxHpBonus;
+    const mastery = getMastery(this.profile.levelStats[this.levelIndex]?.victories ?? 0);
+    this.maxHp = GAME_CONFIG.PLAYER.MAX_HP + bonuses.maxHpBonus + mastery.hpBonus;
     this.startMana = GAME_CONFIG.COMBAT.START_MANA + bonuses.startManaBonus;
     this.lightMultiplier = bonuses.lightMultiplier;
+    this.cooldownMultiplier = bonuses.cooldownMultiplier;
   }
 
   private getProfileController(): ProfileController {
@@ -640,32 +646,39 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    this.touchAimAngle = this.applyAimAssist(Math.atan2(dy, dx));
+    // Прицел хранится «как есть»: рыцарь смотрит точно туда, куда ведёт палец.
+    // Доводка к врагу добавляется только к углу выстрела (см. tryFireProjectile).
+    this.touchAimAngle = Math.atan2(dy, dx);
   }
 
   /**
-   * Слабая доводка к ближайшему врагу: снаряд подтягивается к нему, только
-   * если тот попадает в узкий конус вокруг выбранного направления.
+   * Слабая доводка снаряда к врагу. Выбирается не ближайший по расстоянию,
+   * а тот, кто ближе всего к лучу прицела: иначе помощь тянет в сторону.
+   * Дальше TOUCH_AIM_ASSIST_RANGE цели не рассматриваются.
    */
   private applyAimAssist(angle: number): number {
-    const { TOUCH_AIM_ASSIST_ANGLE, TOUCH_AIM_ASSIST_STRENGTH } = GAME_CONFIG.COMBAT;
+    const { TOUCH_AIM_ASSIST_ANGLE, TOUCH_AIM_ASSIST_STRENGTH, TOUCH_AIM_ASSIST_RANGE } =
+      GAME_CONFIG.COMBAT;
 
-    let nearest: EnemyEntity | null = null;
-    let nearestDistance = Infinity;
+    let target: EnemyEntity | null = null;
+    let bestDelta: number = TOUCH_AIM_ASSIST_ANGLE;
+
     for (const enemy of this.enemies) {
       const distance = Phaser.Math.Distance.Between(this.playerX, this.playerY, enemy.x, enemy.y);
-      if (distance < nearestDistance) {
-        nearest = enemy;
-        nearestDistance = distance;
-      }
+      if (distance > TOUCH_AIM_ASSIST_RANGE) continue;
+
+      const enemyAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, enemy.x, enemy.y);
+      const delta = Math.abs(Phaser.Math.Angle.Wrap(enemyAngle - angle));
+      if (delta >= bestDelta) continue;
+
+      bestDelta = delta;
+      target = enemy;
     }
-    if (!nearest) return angle;
 
-    const targetAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, nearest.x, nearest.y);
-    const delta = Phaser.Math.Angle.Wrap(targetAngle - angle);
-    if (Math.abs(delta) > TOUCH_AIM_ASSIST_ANGLE) return angle;
+    if (!target) return angle;
 
-    return angle + delta * TOUCH_AIM_ASSIST_STRENGTH;
+    const targetAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, target.x, target.y);
+    return angle + Phaser.Math.Angle.Wrap(targetAngle - angle) * TOUCH_AIM_ASSIST_STRENGTH;
   }
 
   private endTouchPointer(pointer: Phaser.Input.Pointer): void {
@@ -814,11 +827,10 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Перезарядка с учётом дара «Скорое пламя». */
+  /** Перезарядка с учётом улучшения «Быстрая рука» и дара «Скорое пламя». */
   private getFireCooldown(): number {
-    return this.boons.has('RAPID_FIRE')
-      ? GAME_CONFIG.COMBAT.FIRE_COOLDOWN * 0.75
-      : GAME_CONFIG.COMBAT.FIRE_COOLDOWN;
+    const base = GAME_CONFIG.COMBAT.FIRE_COOLDOWN * this.cooldownMultiplier;
+    return this.boons.has('RAPID_FIRE') ? base * 0.75 : base;
   }
 
   private tryFireProjectile(): void {
@@ -834,11 +846,16 @@ export class GameScene extends Phaser.Scene {
     this.fireCooldown = this.getFireCooldown();
     this.shotsFired++;
 
-    this.spawnPlayerProjectile(this.aimAngle);
+    // Доводка работает только для выстрела со стика прицела: на ПК и с
+    // клавиатуры угол остаётся ровно тем, куда смотрит курсор.
+    const aimedByStick = this.touchAimPointerId !== null && this.touchAimAngle !== null;
+    const shotAngle = aimedByStick ? this.applyAimAssist(this.aimAngle) : this.aimAngle;
+
+    this.spawnPlayerProjectile(shotAngle);
 
     // «Раздвоенный луч»: второй снаряд летит чуть вбок.
     if (this.boons.has('DOUBLE_SHOT')) {
-      this.spawnPlayerProjectile(this.aimAngle + 0.13);
+      this.spawnPlayerProjectile(shotAngle + 0.13);
     }
   }
 
@@ -1135,6 +1152,22 @@ export class GameScene extends Phaser.Scene {
     this.uiOverlay.removeAll(true);
     this.gameState = 'PLAYING';
     this.beginWave(this.waveIndex + 1);
+  }
+
+  /**
+   * Мастерство локации: после 10 побед здесь страж начинает спуск
+   * со случайным даром. Дар выдаётся до восстановления HP.
+   */
+  private grantMasteryBoon(): void {
+    const mastery = getMastery(this.profile.levelStats[this.levelIndex]?.victories ?? 0);
+    if (!mastery.startingBoon) return;
+
+    const key = BOON_ORDER[Math.floor(Math.random() * BOON_ORDER.length)];
+    this.boons.add(key);
+    if (key === 'VITALITY') this.maxHp += 1;
+
+    showMasteryNotice(this, BOONS[key].name, BOONS[key].effect);
+    track('mastery_boon', { location: this.levelIndex + 1, boon: key });
   }
 
   private spawnEnemy(type: EnemyTypeKey): void {
@@ -1938,6 +1971,11 @@ export class GameScene extends Phaser.Scene {
     this.resetPlayerPosition();
     this.applyProfileBonuses();
 
+    // Дар мастерства выдаётся до восстановления HP: «Стойкость» сразу
+    // повышает максимум, и запас заполняется уже с учётом бонуса.
+    this.boons.clear();
+    this.grantMasteryBoon();
+
     this.hp = this.maxHp;
     this.mana = this.startMana;
     this.invulnTimer = 0;
@@ -1966,7 +2004,6 @@ export class GameScene extends Phaser.Scene {
     this.waveActive = false;
     this.guaranteedQueue = [];
     this.bossAddsTimer = 0;
-    this.boons.clear();
 
     this.uiOverlay.removeAll(true);
     this.hud.container.setVisible(true).setAlpha(0);
@@ -2003,6 +2040,7 @@ export class GameScene extends Phaser.Scene {
       hp: this.hp,
       maxHp: this.maxHp,
       echoGained: 0,
+      echoMultiplier: 1,
       echoTotal: this.profile.echo,
       victory,
       newlyUnlockedLevel: null,
@@ -2034,6 +2072,7 @@ export class GameScene extends Phaser.Scene {
     this.profile = reward.profile;
     saveProfile(this.profile);
     stats.echoGained = reward.echoGained;
+    stats.echoMultiplier = reward.echoMultiplier;
     stats.echoTotal = this.profile.echo;
     stats.newlyUnlockedLevel =
       this.profile.unlockedLevels > unlockedBefore ? this.profile.unlockedLevels : null;

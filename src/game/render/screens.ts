@@ -13,6 +13,7 @@ import {
   UPGRADES,
   type UpgradeKey,
 } from '../core/upgrades';
+import { getMastery, MASTERY_STEPS } from '../core/mastery';
 import { drawHubBackground } from './hubBackground';
 import {
   createButton,
@@ -48,21 +49,48 @@ function formatFloor(floor: number): string {
 }
 
 /**
- * Жирный шеврон для кнопок листания локаций.
- * Типографские «‹ ›» были слишком тонкими для остального интерфейса,
- * поэтому стрелка рисуется геометрией. direction: -1 — влево, 1 — вправо.
+ * Шеврон для селектора локаций. Тонкий штрих (2 px) совпадает по весу
+ * с рамками панелей и не спорит с подписью. direction: -1 — влево, 1 — вправо.
  */
 function createChevron(scene: Phaser.Scene, direction: number): Phaser.GameObjects.Graphics {
   const graphics = scene.add.graphics();
   const back = -direction * 4;
-  const tip = direction * 4;
-  graphics.lineStyle(3, UI_COLORS.brassBright, 1);
+  const tip = direction * 3.5;
+  graphics.lineStyle(2, UI_COLORS.brassBright, 1);
   graphics.beginPath();
-  graphics.moveTo(back, -7);
+  graphics.moveTo(back, -6.5);
   graphics.lineTo(tip, 0);
-  graphics.lineTo(back, 7);
+  graphics.lineTo(back, 6.5);
   graphics.strokePath();
   return graphics;
+}
+
+/**
+ * Сегмент-стрелка внутри полоски выбора локации. Виден только шеврон,
+ * а зона нажатия шире него — под палец. Плашки и тени не рисуются,
+ * чтобы стрелки не выглядели отдельными кнопками.
+ */
+function createLevelArrow(
+  scene: Phaser.Scene,
+  direction: number,
+  onClick: () => void
+): { container: Phaser.GameObjects.Container; hit: Phaser.GameObjects.Rectangle } {
+  const container = scene.add.container(direction * 140, 0);
+  const chevron = createChevron(scene, direction).setAlpha(0.7);
+  const hit = scene.add
+    .rectangle(0, 0, 40, 30, 0x000000, 0)
+    .setInteractive({ useHandCursor: true });
+
+  hit.on('pointerover', () => chevron.setAlpha(1));
+  hit.on('pointerout', () => chevron.setAlpha(0.7));
+  hit.on('pointerdown', () => chevron.setAlpha(0.5));
+  hit.on('pointerup', () => {
+    chevron.setAlpha(1);
+    onClick();
+  });
+
+  container.add([hit, chevron]);
+  return { container, hit };
 }
 
 /** Лучшее время локации: «—», секунды или «м:сс». */
@@ -89,6 +117,8 @@ export interface GameOverStats {
   maxHp: number;
   /** Сколько Эха принёс этот спуск. */
   echoGained: number;
+  /** Множитель Эха за спуск (улучшение и мастерство): 1 — без бонусов. */
+  echoMultiplier: number;
   /** Сколько Эха всего накоплено в профиле. */
   echoTotal: number;
   victory: boolean;
@@ -544,59 +574,70 @@ function createUpgradesModal(
     letterSpacing: 1,
   }).setOrigin(1, 0.5);
 
-  const statusText = scene.add.text(640, 578, '', {
+  // Сообщение о покупке живёт рядом с кошельком: снизу место заняли карточки.
+  const statusText = scene.add.text(1108, 116, '', {
     fontFamily: UI_FONT.body,
-    fontSize: '12px',
+    fontSize: '11px',
     fontStyle: 'bold',
     color: '#94a3b8',
-  }).setOrigin(0.5);
+  }).setOrigin(1, 0.5);
+
+  const iconByKey: Record<UpgradeKey, 'banner' | 'crystal' | 'flame' | 'bolt' | 'star'> = {
+    VITALITY: 'banner',
+    MANA_RESERVE: 'crystal',
+    BRIGHT_TORCH: 'flame',
+    SWIFT_HAND: 'bolt',
+    FORTUNE: 'star',
+  };
 
   const cards: UpgradeCardRef[] = UPGRADE_ORDER.map((key, index) => {
     const definition = UPGRADES[key];
-    const y = 158 + index * 136;
-    const iconKind = key === 'VITALITY' ? 'banner' : key === 'MANA_RESERVE' ? 'crystal' : 'flame';
+    // Пять карточек по 86 px с шагом 94: последняя заканчивается на 594,
+    // ниже остаётся место для кнопки «Закрыть».
+    const y = 132 + index * 94;
+    const iconKind = iconByKey[key];
 
     const cardContainer = scene.add.container(0, y);
-    const cardPanel = createPanel(scene, 220, 0, 840, 120, 0x4b5d77);
-    const icon = createIcon(scene, 268, 60, iconKind, 32, UI_COLORS.emberBright);
+    const cardPanel = createPanel(scene, 220, 0, 840, 86, 0x4b5d77);
+    const icon = createIcon(scene, 264, 43, iconKind, 26, UI_COLORS.emberBright);
 
-    const name = scene.add.text(300, 14, definition.name, {
+    const name = scene.add.text(296, 6, definition.name, {
       fontFamily: UI_FONT.display,
-      fontSize: '18px',
+      fontSize: '16px',
       fontStyle: 'bold',
       color: '#f0c674',
       letterSpacing: 1,
     });
 
-    const description = scene.add.text(300, 42, definition.description, {
+    const description = scene.add.text(296, 28, definition.description, {
       fontFamily: UI_FONT.body,
-      fontSize: '12px',
+      fontSize: '11px',
       color: '#c3cedd',
-      lineSpacing: 4,
-      wordWrap: { width: 400 },
+      lineSpacing: 2,
+      wordWrap: { width: 430 },
     });
 
-    const effect = scene.add.text(300, 88, definition.effect, {
+    const effect = scene.add.text(296, 58, definition.effect, {
       fontFamily: UI_FONT.body,
-      fontSize: '12px',
+      fontSize: '11px',
       fontStyle: 'bold',
       color: '#7dd3fc',
     });
 
-    const levelText = scene.add.text(1040, 16, '', {
+    const levelText = scene.add.text(1040, 8, '', {
       fontFamily: UI_FONT.body,
-      fontSize: '11px',
+      fontSize: '10px',
       fontStyle: 'bold',
       color: '#94a3b8',
       letterSpacing: 1,
     }).setOrigin(1, 0);
 
-    const buyButton = createButton(scene, 960, 72, 180, 40, '', {
+    const buyButton = createButton(scene, 960, 50, 170, 34, '', {
       variant: 'primary',
       accent: UI_COLORS.ember,
       accentHex: '#1a1205',
       onClick: () => handleBuy(key),
-      fontSize: 12,
+      fontSize: 11,
     });
 
     cardContainer.add([
@@ -845,9 +886,19 @@ export function drawStartScreen(
     fontSize: 17,
   });
 
-  // Локация: стрелки листают все, но закрытую нельзя начать.
+  // Локация: сегментная полоска во всю ширину колонки. Стрелки — сегменты
+  // по краям, между ними подпись выбранной локации.
   let selectedLevel = Phaser.Math.Clamp(levelSelect.index, 0, Math.max(0, levelSelect.levels.length - 1));
-  const levelLabel = scene.add.text(menuX, 196, '', {
+
+  const levelStrip = scene.add.container(menuX, 196);
+  const levelStripBg = scene.add
+    .rectangle(0, 0, 320, 30, 0x0f1626, 0.96)
+    .setStrokeStyle(2, UI_COLORS.brass, 0.95);
+  const levelStripHighlight = scene.add.rectangle(0, -13, 314, 2, 0xffffff, 0.08);
+  const levelStripSideLeft = scene.add.rectangle(-120, 0, 1, 22, UI_COLORS.brass, 0.35);
+  const levelStripSideRight = scene.add.rectangle(120, 0, 1, 22, UI_COLORS.brass, 0.35);
+
+  const levelLabel = scene.add.text(0, 0, '', {
     fontFamily: UI_FONT.body,
     fontSize: '10px',
     fontStyle: 'bold',
@@ -874,23 +925,24 @@ export function drawStartScreen(
     refreshStats();
   };
 
-  // Стрелки стоят внутри колонки кнопок (840…1160 = menuX ± 160), чтобы край
-  // ряда совпадал с «СПУСТИТЬСЯ», а не выступал за него, как раньше.
-  const levelPrev = createButton(scene, 858, 196, 36, 32, '', {
-    variant: 'ghost',
-    accent: UI_COLORS.brass,
-    accentHex: '#f0c674',
-    onClick: () => cycleLevel(-1),
-  });
-  levelPrev.container.add(createChevron(scene, -1));
+  const levelPrev = createLevelArrow(scene, -1, () => cycleLevel(-1));
+  const levelNext = createLevelArrow(scene, 1, () => cycleLevel(1));
 
-  const levelNext = createButton(scene, 1142, 196, 36, 32, '', {
-    variant: 'ghost',
-    accent: UI_COLORS.brass,
-    accentHex: '#f0c674',
-    onClick: () => cycleLevel(1),
-  });
-  levelNext.container.add(createChevron(scene, 1));
+  // Ховер по стрелкам подсвечивает всю полоску, как у обычных кнопок.
+  for (const arrow of [levelPrev, levelNext]) {
+    arrow.hit.on('pointerover', () => levelStripBg.setFillStyle(0x16203a, 0.98));
+    arrow.hit.on('pointerout', () => levelStripBg.setFillStyle(0x0f1626, 0.96));
+  }
+
+  levelStrip.add([
+    levelStripBg,
+    levelStripHighlight,
+    levelStripSideLeft,
+    levelStripSideRight,
+    levelLabel,
+    levelPrev.container,
+    levelNext.container,
+  ]);
 
   renderLevel();
 
@@ -917,61 +969,62 @@ export function drawStartScreen(
   });
 
   // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
-  // Панель на 132 вместо 124: две строки итогов должны целиком помещаться
-  // внутрь рамки, а не съезжать на её нижний край.
+  // Три ряда: заголовок, две ячейки (Эхо и ранг) и две строки итогов.
+  // Раньше блоки были выровнены по-разному, и итоги задевали подпись «РАНГ».
   const statsPanel = createPanel(scene, 840, 500, 320, 132, UI_COLORS.brass, {
     alpha: 0.96,
   });
 
-  const statsHeader = scene.add.text(1000, 516, 'ХРОНИКА СТРАЖА', {
+  const statsHeader = scene.add.text(1000, 513, 'ХРОНИКА СТРАЖА', {
     fontFamily: UI_FONT.body,
     fontSize: '10px',
     fontStyle: 'bold',
     color: '#7c8ba1',
     letterSpacing: 2,
   }).setOrigin(0.5);
-  const statsDivider = createDivider(scene, 1000, 530, 260, UI_COLORS.brass);
+  const statsDivider = createDivider(scene, 1000, 527, 260, UI_COLORS.brass);
+  const statsColumn = scene.add.rectangle(1000, 564, 1, 48, UI_COLORS.brass, 0.3);
 
-  const echoIcon = createIcon(scene, 886, 558, 'crystal', 20, UI_COLORS.mana);
+  /** Подпись сверху и значение по центру — общий вертикальный ритм ячеек. */
+  const createStatCell = (
+    x: number,
+    caption: string,
+    valueSize: string,
+    valueColor: string,
+    centered: boolean
+  ): { label: Phaser.GameObjects.Text; value: Phaser.GameObjects.Text } => {
+    const label = scene.add
+      .text(x, 540, caption, {
+        fontFamily: UI_FONT.body,
+        fontSize: '9px',
+        fontStyle: 'bold',
+        color: '#7c8ba1',
+        letterSpacing: 2,
+      })
+      .setOrigin(centered ? 0.5 : 0, 0);
+    const value = scene.add
+      .text(x, 570, '', {
+        fontFamily: UI_FONT.display,
+        fontSize: valueSize,
+        fontStyle: 'bold',
+        color: valueColor,
+      })
+      .setOrigin(centered ? 0.5 : 0, 0.5);
+    return { label, value };
+  };
 
-  const echoLabel = scene.add.text(904, 544, 'ЭХО', {
-    fontFamily: UI_FONT.body,
-    fontSize: '10px',
-    fontStyle: 'bold',
-    color: '#7c8ba1',
-    letterSpacing: 2,
-  });
+  const echoIcon = createIcon(scene, 884, 570, 'crystal', 18, UI_COLORS.mana);
+  const echoCell = createStatCell(902, 'ЭХО', '22px', '#f0c674', false);
 
-  const echoValue = scene.add.text(904, 556, '', {
-    fontFamily: UI_FONT.display,
-    fontSize: '26px',
-    fontStyle: 'bold',
-    color: '#f0c674',
-  });
+  const rankMedallion = createMedallion(scene, 1106, 570, 18, UI_COLORS.brass);
+  const rankCell = createStatCell(1106, 'РАНГ', '18px', '#f4ecd8', true);
 
-  const rankMedallion = createMedallion(scene, 1106, 556, 22, UI_COLORS.brass);
-  const rankValue = scene.add.text(1106, 556, '', {
-    fontFamily: UI_FONT.display,
-    fontSize: '22px',
-    fontStyle: 'bold',
-    color: '#f4ecd8',
-  }).setOrigin(0.5);
-  const rankLabel = scene.add.text(1106, 588, 'РАНГ', {
-    fontFamily: UI_FONT.body,
-    fontSize: '9px',
-    fontStyle: 'bold',
-    color: '#7c8ba1',
-    letterSpacing: 2,
-  }).setOrigin(0.5);
-
-  // Две строки итогов центрируются по панели и не выходят за её нижнюю
-  // границу: раньше текст стоял по левому краю с началом у 606 и налезал
-  // на рамку.
-  const statsSummary = scene.add.text(1000, 606, '', {
+  // Две строки итогов идут ниже подписи ранга и не касаются нижней рамки.
+  const statsSummary = scene.add.text(1000, 608, '', {
     fontFamily: UI_FONT.body,
     fontSize: '10px',
     color: '#94a3b8',
-    lineSpacing: 4,
+    lineSpacing: 2,
   }).setOrigin(0.5);
 
   const refreshStats = (): void => {
@@ -979,13 +1032,15 @@ export function drawStartScreen(
     const levelStats = profile.levelStats[selectedLevel] ?? profile.levelStats[0];
     const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
 
-    echoValue.setText(`${profile.echo}`);
-    // Медалка и строки под ней — рекорды выбранной локации.
-    rankValue.setText(levelStats.bestRank ?? '—');
+    echoCell.value.setText(`${profile.echo}`);
+    // Медальон и подпись под ним — рекорды выбранной локации.
+    rankCell.value.setText(levelStats.bestRank ?? '—');
     statsHeader.setText(`ХРОНИКА СТРАЖА · ЛОКАЦИЯ ${roman}`);
+    const mastery = getMastery(levelStats.victories);
     statsSummary.setText(
       `Лучший счёт ${levelStats.bestScore} · Время ${formatRunTime(levelStats.bestTime)}\n` +
-        `Спуски ${levelStats.runs} · Победы ${levelStats.victories}`
+        `Спуски ${levelStats.runs} · Победы ${levelStats.victories} · ` +
+        `Мастерство ${mastery.tier}/${MASTERY_STEPS.length}`
     );
   };
   refreshStats();
@@ -1000,9 +1055,7 @@ export function drawStartScreen(
     lore,
     sloganText,
     menuTitle,
-    levelLabel,
-    levelPrev.container,
-    levelNext.container,
+    levelStrip,
     startButton.container,
     upgradesButton.container,
     settingsButton.container,
@@ -1010,12 +1063,13 @@ export function drawStartScreen(
     statsPanel,
     statsHeader,
     statsDivider,
+    statsColumn,
     echoIcon,
-    echoLabel,
-    echoValue,
+    echoCell.label,
+    echoCell.value,
     rankMedallion,
-    rankValue,
-    rankLabel,
+    rankCell.label,
+    rankCell.value,
     statsSummary,
   ]);
 
@@ -1213,7 +1267,9 @@ function drawResultScreen(
   const echoText = scene.add.text(
     0,
     170,
-    `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
+    stats.echoMultiplier > 1
+      ? `+${stats.echoGained} ЭХА · ×${stats.echoMultiplier.toFixed(2)} · ВСЕГО ${stats.echoTotal}`
+      : `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
     {
       fontFamily: UI_FONT.body,
       fontSize: '13px',

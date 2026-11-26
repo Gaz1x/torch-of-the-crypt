@@ -776,11 +776,16 @@ interface TrialsModal {
   open: () => void;
 }
 
+interface TrialToggle {
+  container: Phaser.GameObjects.Container;
+  setEnabled: (enabled: boolean) => void;
+}
+
 interface TrialCardRef {
   key: TrialKey;
   container: Phaser.GameObjects.Container;
   baseY: number;
-  toggle: ReturnType<typeof createButton>;
+  toggle: TrialToggle;
 }
 
 function createTrialsModal(
@@ -832,6 +837,76 @@ function createTrialsModal(
     CROWD: 'skull',
   };
 
+  /**
+   * Переключатель испытания. createButton здесь не подходит: при pointerout
+   * он возвращает цвет, заданный при создании, и включённая кнопка снова
+   * выглядит серой. Поэтому цвет хранится вместе с состоянием.
+   */
+  const createTrialToggle = (
+    x: number,
+    y: number,
+    onClick: () => void
+  ): TrialToggle => {
+    const container = scene.add.container(x, y);
+    const background = scene.add
+      .rectangle(0, 0, 170, 34, 0x1e293b, 0.9)
+      .setStrokeStyle(2, 0x64748b, 0.95)
+      .setInteractive({ useHandCursor: true });
+    const label = scene.add.text(0, 0, 'ВЫКЛЮЧЕНО', {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#94a3b8',
+      letterSpacing: 1,
+    }).setOrigin(0.5);
+
+    container.add([background, label]);
+
+    let enabled = false;
+    let pressed = false;
+
+    const paint = (hover: boolean): void => {
+      if (enabled) {
+        background.setFillStyle(hover ? 0x7dd3fc : UI_COLORS.mana, 0.96);
+        background.setStrokeStyle(2, 0x7dd3fc, 0.95);
+        label.setColor('#04121f');
+      } else {
+        background.setFillStyle(hover ? 0x27364b : 0x1e293b, 0.9);
+        background.setStrokeStyle(2, 0x64748b, 0.95);
+        label.setColor('#94a3b8');
+      }
+    };
+
+    background.on('pointerover', () => {
+      container.setScale(1.02);
+      paint(true);
+    });
+    background.on('pointerout', () => {
+      container.setScale(1);
+      pressed = false;
+      paint(false);
+    });
+    background.on('pointerdown', () => {
+      pressed = true;
+      container.setScale(0.98);
+    });
+    background.on('pointerup', () => {
+      container.setScale(1.02);
+      if (!pressed) return;
+      pressed = false;
+      onClick();
+    });
+
+    return {
+      container,
+      setEnabled: (value: boolean) => {
+        enabled = value;
+        label.setText(value ? 'ВКЛЮЧЕНО' : 'ВЫКЛЮЧЕНО');
+        paint(false);
+      },
+    };
+  };
+
   const cards: TrialCardRef[] = TRIAL_ORDER.map((key, index) => {
     const definition = TRIALS[key];
     const y = 132 + index * 94;
@@ -872,13 +947,7 @@ function createTrialsModal(
       letterSpacing: 1,
     }).setOrigin(1, 0);
 
-    const toggle = createButton(scene, 960, 50, 170, 34, '', {
-      variant: 'secondary',
-      accent: UI_COLORS.mana,
-      accentHex: '#04121f',
-      onClick: () => handleToggle(key),
-      fontSize: 11,
-    });
+    const toggle = createTrialToggle(960, 50, () => handleToggle(key));
 
     cardContainer.add([
       cardPanel,
@@ -900,17 +969,8 @@ function createTrialsModal(
 
     for (const card of cards) {
       const enabled = active.has(card.key);
-      card.toggle.label.setText(enabled ? 'ВКЛЮЧЕНО' : 'ВЫКЛЮЧЕНО');
-
-      if (enabled) {
-        card.toggle.label.setColor('#04121f');
-        card.toggle.background.setFillStyle(UI_COLORS.mana, 0.96);
-        card.container.setAlpha(1);
-      } else {
-        card.toggle.label.setColor('#94a3b8');
-        card.toggle.background.setFillStyle(0x1e293b, 0.9);
-        card.container.setAlpha(0.82);
-      }
+      card.toggle.setEnabled(enabled);
+      card.container.setAlpha(enabled ? 1 : 0.82);
     }
   };
 

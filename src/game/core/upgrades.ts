@@ -25,12 +25,12 @@ export interface UpgradeDefinition {
 /** Сколько даёт один уровень каждого улучшения. */
 export const UPGRADE_VALUES = {
   HP_PER_LEVEL: 1,
-  MANA_PER_LEVEL: 15,
-  LIGHT_PER_LEVEL: 0.08,
+  MANA_PER_LEVEL: 5,
+  LIGHT_PER_LEVEL: 0.03,
   /** Доля, на которую сокращается перезарядка выстрела. */
-  COOLDOWN_PER_LEVEL: 0.08,
+  COOLDOWN_PER_LEVEL: 0.05,
   /** Доля, на которую растёт Эхо за спуск. */
-  ECHO_PER_LEVEL: 0.1,
+  ECHO_PER_LEVEL: 0.05,
 } as const;
 
 export const UPGRADES: Record<UpgradeKey, UpgradeDefinition> = {
@@ -40,40 +40,54 @@ export const UPGRADES: Record<UpgradeKey, UpgradeDefinition> = {
     description: 'Закалка тела стража: следующий спуск начнётся с большим запасом здоровья.',
     effect: `+${UPGRADE_VALUES.HP_PER_LEVEL} к максимуму здоровья`,
     maxLevel: 4,
-    prices: [40, 90, 160, 260],
+    // Здоровье не растёт с числом локаций: иначе челлендж исчезает.
+    prices: [70, 160, 320, 560],
   },
   MANA_RESERVE: {
     key: 'MANA_RESERVE',
     name: 'РЕЗЕРВ ЭФИРА',
     description: 'Запас эфира в дороге: больше маны уже на старте спуска.',
     effect: `+${UPGRADE_VALUES.MANA_PER_LEVEL} к стартовой мане`,
-    maxLevel: 4,
-    prices: [40, 90, 160, 260],
+    maxLevel: 6,
+    // 8 уровней × 5 = +40: старт упирается ровно в MAX_MANA.
+    prices: [40, 80, 140, 220, 340, 500, 700, 900],
   },
   BRIGHT_TORCH: {
     key: 'BRIGHT_TORCH',
     name: 'ЯРКИЙ ФАКЕЛ',
     description: 'Плотнее промасленная ткань факела расширяет круг света в крипте.',
     effect: `+${Math.round(UPGRADE_VALUES.LIGHT_PER_LEVEL * 100)}% к радиусу света`,
-    maxLevel: 4,
-    prices: [50, 110, 190, 300],
+    maxLevel: 6,
+    prices: [50, 100, 170, 270, 390, 550, 750, 950],
   },
   SWIFT_HAND: {
     key: 'SWIFT_HAND',
     name: 'БЫСТРАЯ РУКА',
     description: 'Страж перехватывает факел увереннее: искры срываются с посоха чаще.',
     effect: `−${Math.round(UPGRADE_VALUES.COOLDOWN_PER_LEVEL * 100)}% к перезарядке`,
-    maxLevel: 3,
-    prices: [60, 140, 240],
+    maxLevel: 4,
+    prices: [70, 160, 290, 470, 650, 900],
   },
   FORTUNE: {
     key: 'FORTUNE',
     name: 'ЩЕДРАЯ ТЬМА',
     description: 'Крипта отдаёт щедрее: каждый спуск приносит больше Эха.',
     effect: `+${Math.round(UPGRADE_VALUES.ECHO_PER_LEVEL * 100)}% к Эху за спуск`,
-    maxLevel: 3,
-    prices: [80, 180, 320],
+    maxLevel: 4,
+    prices: [60, 140, 260, 430, 600, 850],
   },
+};
+
+/**
+ * Сколько дополнительных уровней открывает каждая новая локация.
+ * Здоровье и мана не растут: у них есть жёсткий потолок.
+ */
+export const UPGRADE_LOCATION_GROWTH: Record<UpgradeKey, number> = {
+  VITALITY: 0,
+  MANA_RESERVE: 1,
+  BRIGHT_TORCH: 1,
+  SWIFT_HAND: 1,
+  FORTUNE: 1,
 };
 
 /** Порядок карточек в окне улучшений. */
@@ -120,9 +134,22 @@ export function getUpgradeBonuses(levels: UpgradeLevels): UpgradeBonuses {
   };
 }
 
-/** Цена следующего уровня или null, если улучшение уже максимальное. */
-export function getUpgradeCost(key: UpgradeKey, level: number): number | null {
+/**
+ * Максимум уровня с учётом открытых локаций.
+ * Цены задают абсолютный потолок: «мёртвых» уровней без эффекта не будет.
+ */
+export function getUpgradeMaxLevel(key: UpgradeKey, unlockedLevels: number): number {
   const definition = UPGRADES[key];
-  if (level >= definition.maxLevel) return null;
-  return definition.prices[level] ?? null;
+  const growth = UPGRADE_LOCATION_GROWTH[key] * Math.max(0, unlockedLevels - 1);
+  return Math.min(definition.maxLevel + growth, definition.prices.length);
+}
+
+/** Цена следующего уровня или null, если улучшение уже максимальное. */
+export function getUpgradeCost(
+  key: UpgradeKey,
+  level: number,
+  unlockedLevels: number
+): number | null {
+  if (level >= getUpgradeMaxLevel(key, unlockedLevels)) return null;
+  return UPGRADES[key].prices[level] ?? null;
 }

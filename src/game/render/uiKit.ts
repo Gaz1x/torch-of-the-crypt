@@ -29,6 +29,8 @@ export const UI_FONT = {
   display: '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif',
   /** Интерфейс и описания. */
   body: '"Segoe UI", "Trebuchet MS", system-ui, sans-serif',
+  /** Числа и таблицы: цифры одинаковой ширины, чтобы колонки не «плясали». */
+  mono: 'Consolas, "SFMono-Regular", "Cascadia Mono", ui-monospace, monospace',
 } as const;
 
 export const UI_DEPTH = {

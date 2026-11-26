@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
 import {
   calculateRank,
+  RANK_TITLES,
+  VICTORY_RANKS,
   type Profile,
+  type RankLetter,
   type RankResult,
 } from '../core/profile';
 import { DEFAULT_SETTINGS, type GameSettings } from '../core/settings';
@@ -9,6 +12,7 @@ import { track } from '../core/analytics';
 import type { BoonDefinition, BoonKey } from '../core/boons';
 import {
   getUpgradeCost,
+  getUpgradeMaxLevel,
   UPGRADE_ORDER,
   UPGRADES,
   type UpgradeKey,
@@ -107,6 +111,32 @@ function formatRunTime(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
+/** «1 240» — разряды через пробел, чтобы числа читались с одного взгляда. */
+function formatNumber(value: number): string {
+  return Math.max(0, Math.round(value)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+interface RankStyle {
+  accent: number;
+  hex: string;
+}
+
+/** Цвета рангов: от стали к белому пламени. */
+const RANK_STYLES: Record<RankLetter, RankStyle> = {
+  B: { accent: 0x94a3b8, hex: '#94a3b8' },
+  A: { accent: 0x38bdf8, hex: '#7dd3fc' },
+  S: { accent: 0xfbbf24, hex: '#fbbf24' },
+  SS: { accent: 0xfb923c, hex: '#fb923c' },
+  'SS+': { accent: 0xf87171, hex: '#f87171' },
+  SSS: { accent: 0xa78bfa, hex: '#a78bfa' },
+  'SSS+': { accent: 0xe2e8f0, hex: '#e2e8f0' },
+};
+
+/** Длинный ранг не должен вылезать за медальон: уменьшаем кегль. */
+function rankFontSize(letter: string, base: number, step: number): number {
+  return Math.max(16, base - (letter.length - 1) * step);
+}
+
 /** Статистика, показываемая на экране победы или поражения. */
 export interface GameOverStats {
   score: number;
@@ -123,10 +153,12 @@ export interface GameOverStats {
   maxHp: number;
   /** Сколько Эха принёс этот спуск. */
   echoGained: number;
-  /** Множитель Эха за спуск (улучшение и мастерство): 1 — без бонусов. */
+  /** Множитель Эха за спуск (улучшение, мастерство и локация): 1 — без бонусов. */
   echoMultiplier: number;
   /** Множитель очков за включённые испытания: 1 — без испытаний. */
   trialMultiplier: number;
+  /** Сколько испытаний было включено на старте спуска. */
+  trialsCount: number;
   /** Сколько Эха всего накоплено в профиле. */
   echoTotal: number;
   victory: boolean;
@@ -668,10 +700,11 @@ function createUpgradesModal(
     echoText.setText(`ЭХО: ${profile.echo}`);
 
     for (const card of cards) {
-      const definition = UPGRADES[card.key];
       const level = profile.upgrades[card.key];
-      const cost = getUpgradeCost(card.key, level);
-      card.levelText.setText(`УРОВЕНЬ ${level} / ${definition.maxLevel}`);
+      const cost = getUpgradeCost(card.key, level, profile.unlockedLevels);
+      card.levelText.setText(
+        `УРОВЕНЬ ${level} / ${getUpgradeMaxLevel(card.key, profile.unlockedLevels)}`
+      );
 
       if (cost === null) {
         card.buyButton.label.setText('МАКСИМУМ');
@@ -701,7 +734,7 @@ function createUpgradesModal(
   function handleBuy(key: UpgradeKey): void {
     // Данные «до покупки» нужны для события Метрики: какой уровень куплен и за сколько.
     const before = controller.getProfile();
-    const cost = getUpgradeCost(key, before.upgrades[key]);
+    const cost = getUpgradeCost(key, before.upgrades[key], before.unlockedLevels);
     const result = controller.buyUpgrade(key);
     statusText.setText(result.message);
     statusText.setColor(result.ok ? '#fbbf24' : '#fca5a5');
@@ -1265,79 +1298,142 @@ export function drawStartScreen(
   };
 
   // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
-  // Три ряда: заголовок, две ячейки (Эхо и ранг) и две строки итогов.
-  // Раньше блоки были выровнены по-разному, и итоги задевали подпись «РАНГ».
-  const statsPanel = createPanel(scene, 840, 500, 320, 132, UI_COLORS.brass, {
+  // Сверху Эхо, отдельный блок ранга, построчные рекорды и полоса мастерства.
+  const statsPanel = createPanel(scene, 840, 492, 320, 200, UI_COLORS.brass, {
     alpha: 0.96,
   });
 
-  const statsHeader = scene.add.text(1000, 513, 'ХРОНИКА СТРАЖА', {
+  const statsHeader = scene.add.text(856, 506, 'ХРОНИКА · ЛОКАЦИЯ I', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
+    fontSize: '9px',
     fontStyle: 'bold',
     color: '#7c8ba1',
-    letterSpacing: 2,
-  }).setOrigin(0.5);
-  const statsDivider = createDivider(scene, 1000, 527, 260, UI_COLORS.brass);
-  const statsColumn = scene.add.rectangle(1000, 564, 1, 48, UI_COLORS.brass, 0.3);
+    letterSpacing: 1.5,
+  }).setOrigin(0, 0.5);
 
-  /** Подпись сверху и значение по центру — общий вертикальный ритм ячеек. */
-  const createStatCell = (
-    x: number,
-    caption: string,
-    valueSize: string,
-    valueColor: string,
-    centered: boolean
-  ): { label: Phaser.GameObjects.Text; value: Phaser.GameObjects.Text } => {
-    const label = scene.add
-      .text(x, 540, caption, {
-        fontFamily: UI_FONT.body,
-        fontSize: '9px',
-        fontStyle: 'bold',
-        color: '#7c8ba1',
-        letterSpacing: 2,
-      })
-      .setOrigin(centered ? 0.5 : 0, 0);
-    const value = scene.add
-      .text(x, 570, '', {
-        fontFamily: UI_FONT.display,
-        fontSize: valueSize,
-        fontStyle: 'bold',
-        color: valueColor,
-      })
-      .setOrigin(centered ? 0.5 : 0, 0.5);
-    return { label, value };
-  };
+  const echoIcon = createIcon(scene, 1090, 506, 'crystal', 12, UI_COLORS.mana);
+  const echoValue = scene.add.text(1144, 506, '0', {
+    fontFamily: UI_FONT.mono,
+    fontSize: '12px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+  }).setOrigin(1, 0.5);
 
-  const echoIcon = createIcon(scene, 884, 570, 'crystal', 18, UI_COLORS.mana);
-  const echoCell = createStatCell(902, 'ЭХО', '22px', '#f0c674', false);
+  const statsDividerTop = createDivider(scene, 1000, 518, 288, UI_COLORS.brass);
 
-  const rankMedallion = createMedallion(scene, 1106, 570, 18, UI_COLORS.brass);
-  const rankCell = createStatCell(1106, 'РАНГ', '18px', '#f4ecd8', true);
-
-  // Две строки итогов идут ниже подписи ранга и не касаются нижней рамки.
-  const statsSummary = scene.add.text(1000, 608, '', {
+  const rankMedallion = createMedallion(scene, 872, 542, 16, UI_COLORS.brass);
+  const rankLetter = scene.add.text(894, 542, '—', {
+    fontFamily: UI_FONT.display,
+    fontSize: '32px',
+    fontStyle: 'bold',
+    color: '#64748b',
+  }).setOrigin(0, 0.5);
+  const rankCaption = scene.add.text(1144, 530, 'ЛУЧШИЙ РАНГ', {
     fontFamily: UI_FONT.body,
-    fontSize: '10px',
-    color: '#94a3b8',
-    lineSpacing: 2,
-  }).setOrigin(0.5);
+    fontSize: '8px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 1.5,
+  }).setOrigin(1, 0.5);
+  const rankTitle = scene.add.text(894, 562, 'ПОКА НЕТ', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#64748b',
+    letterSpacing: 1,
+  }).setOrigin(0, 0.5);
+
+  const statsDividerRank = createDivider(scene, 1000, 570, 288, UI_COLORS.brass);
+
+  const statDefs = [
+    { caption: 'ЛУЧШИЙ СЧЁТ', y: 584 },
+    { caption: 'ЛУЧШЕЕ ВРЕМЯ', y: 602 },
+    { caption: 'СПУСКИ', y: 620 },
+    { caption: 'ПОБЕДЫ', y: 638 },
+  ] as const;
+
+  const statRows = statDefs.map(({ caption, y }) => {
+    const label = scene.add.text(856, y, caption, {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: '#7c8ba1',
+      letterSpacing: 1.5,
+    }).setOrigin(0, 0.5);
+    const value = scene.add.text(1144, y, '—', {
+      fontFamily: UI_FONT.mono,
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#e8eef7',
+    }).setOrigin(1, 0.5);
+    return { label, value };
+  });
+
+  const statsDividerBottom = createDivider(scene, 1000, 648, 288, UI_COLORS.brass);
+
+  const masteryLabel = scene.add.text(856, 660, 'МАСТЕРСТВО', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 1.5,
+  }).setOrigin(0, 0.5);
+
+  const masteryDiamonds = MASTERY_STEPS.map((_, index) =>
+    scene.add.rectangle(1010 + index * 16, 660, 7, 7, UI_COLORS.panelLine, 0.6).setAngle(45)
+  );
+
+  const masteryValue = scene.add.text(1144, 660, '0/3', {
+    fontFamily: UI_FONT.mono,
+    fontSize: '11px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+  }).setOrigin(1, 0.5);
+
+  const masteryHint = scene.add.text(856, 676, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    color: '#7c8ba1',
+  }).setOrigin(0, 0.5);
 
   const refreshStats = (): void => {
     const profile = profileController.getProfile();
     const levelStats = profile.levelStats[selectedLevel] ?? profile.levelStats[0];
     const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
-
-    echoCell.value.setText(`${profile.echo}`);
-    // Медальон и подпись под ним — рекорды выбранной локации.
-    rankCell.value.setText(levelStats.bestRank ?? '—');
-    statsHeader.setText(`ХРОНИКА СТРАЖА · ЛОКАЦИЯ ${roman}`);
     const mastery = getMastery(levelStats.victories);
-    statsSummary.setText(
-      `Лучший счёт ${levelStats.bestScore} · Время ${formatRunTime(levelStats.bestTime)}\n` +
-        `Спуски ${levelStats.runs} · Победы ${levelStats.victories} · ` +
-        `Мастерство ${mastery.tier}/${MASTERY_STEPS.length}`
-    );
+
+    statsHeader.setText(`ХРОНИКА · ЛОКАЦИЯ ${roman}`);
+    echoValue.setText(formatNumber(profile.echo));
+
+    // Рекорд выбранной локации: цвет и кегль зависят от длины ранга.
+    const style = levelStats.bestRank ? RANK_STYLES[levelStats.bestRank] : null;
+    const rankText = levelStats.bestRank ?? '—';
+    rankLetter.setText(rankText);
+    rankLetter.setFontSize(rankFontSize(rankText, 32, 3));
+    rankLetter.setColor(style?.hex ?? '#64748b');
+    rankTitle.setText(levelStats.bestRank ? RANK_TITLES[levelStats.bestRank] : 'ПОКА НЕТ');
+    rankTitle.setColor(style?.hex ?? '#64748b');
+
+    statRows[0].value.setText(formatNumber(levelStats.bestScore));
+    statRows[1].value.setText(formatRunTime(levelStats.bestTime));
+    statRows[2].value.setText(`${levelStats.runs}`);
+    statRows[3].value.setText(`${levelStats.victories}`);
+
+    masteryDiamonds.forEach((diamond, index) => {
+      const filled = index < mastery.tier;
+      diamond.setFillStyle(
+        filled ? UI_COLORS.brassBright : UI_COLORS.panelLine,
+        filled ? 1 : 0.6
+      );
+    });
+    masteryValue.setText(`${mastery.tier}/${MASTERY_STEPS.length}`);
+    if (mastery.victoriesToNext === null) {
+      masteryHint.setText('ВСЕ СТУПЕНИ ОТКРЫТЫ');
+    } else {
+      const nextStep =
+        MASTERY_STEPS[Math.min(mastery.tier, MASTERY_STEPS.length - 1)];
+      masteryHint.setText(`«${nextStep.title}» · ещё ${mastery.victoriesToNext}`);
+    }
   };
   refreshStats();
 
@@ -1359,15 +1455,20 @@ export function drawStartScreen(
     trialsButton.container,
     statsPanel,
     statsHeader,
-    statsDivider,
-    statsColumn,
     echoIcon,
-    echoCell.label,
-    echoCell.value,
+    echoValue,
+    statsDividerTop,
     rankMedallion,
-    rankCell.label,
-    rankCell.value,
-    statsSummary,
+    rankLetter,
+    rankCaption,
+    rankTitle,
+    statsDividerRank,
+    ...statRows.flatMap((row) => [row.label, row.value]),
+    statsDividerBottom,
+    masteryLabel,
+    ...masteryDiamonds,
+    masteryValue,
+    masteryHint,
   ]);
 
   const help = createHelpModal(scene, screen);
@@ -1415,13 +1516,13 @@ interface ResultScreenOptions {
 function createRankBlock(
   scene: Phaser.Scene,
   rank: RankResult,
-  accent: number,
   y: number
 ): Phaser.GameObjects.Container {
   const group = scene.add.container(0, y);
+  const style = RANK_STYLES[rank.letter];
 
   const rays = scene.add.graphics();
-  rays.lineStyle(2, accent, 0.22);
+  rays.lineStyle(2, style.accent, 0.22);
   for (let i = 0; i < 12; i++) {
     const angle = (Math.PI * 2 * i) / 12;
     rays.lineBetween(
@@ -1433,16 +1534,14 @@ function createRankBlock(
   }
   group.add(rays);
 
-  const medallion = createMedallion(scene, 0, 0, 62, accent);
+  const medallion = createMedallion(scene, 0, 0, 62, style.accent);
   group.add(medallion);
 
-  const letterColor =
-    rank.letter === 'S' ? '#fbbf24' : rank.letter === 'A' ? '#7dd3fc' : '#cbd5e1';
   const letter = scene.add.text(0, 2, rank.letter, {
     fontFamily: UI_FONT.display,
-    fontSize: '56px',
+    fontSize: `${rankFontSize(rank.letter, 56, 8)}px`,
     fontStyle: 'bold',
-    color: letterColor,
+    color: style.hex,
   }).setOrigin(0.5);
   group.add(letter);
 
@@ -1490,13 +1589,14 @@ function drawResultScreen(
   const divider = createDivider(scene, 0, -190, 440, options.accent);
 
   const rank = calculateRank(stats);
-  const rankBlock = createRankBlock(scene, rank, options.accent, -116);
+  const rankStyle = RANK_STYLES[rank.letter];
+  const rankBlock = createRankBlock(scene, rank, -116);
 
   const rankTitle = scene.add.text(0, -36, rank.title, {
     fontFamily: UI_FONT.body,
     fontSize: '12px',
     fontStyle: 'bold',
-    color: options.accentHex,
+    color: rankStyle.hex,
     letterSpacing: 3,
   }).setOrigin(0.5);
 
@@ -1578,19 +1678,27 @@ function drawResultScreen(
     }
   ).setOrigin(0.5);
 
-  // Строка появляется только при включённых испытаниях.
-  const trialText = scene.add.text(
-    0,
-    184,
-    `ИСПЫТАНИЯ ×${stats.trialMultiplier.toFixed(2)}`,
-    {
-      fontFamily: UI_FONT.body,
-      fontSize: '12px',
-      fontStyle: 'bold',
-      color: '#7dd3fc',
-      letterSpacing: 2,
-    }
-  ).setOrigin(0.5).setVisible(stats.trialMultiplier > 1);
+  // Победа подсказывает следующий ранг; смерть показывает только множитель.
+  const nextRank =
+    stats.victory && stats.trialsCount < VICTORY_RANKS.length - 1
+      ? VICTORY_RANKS[stats.trialsCount + 1] ?? null
+      : null;
+  const trialLine = stats.victory
+    ? nextRank !== null
+      ? stats.trialsCount > 0
+        ? `ИСПЫТАНИЯ ×${stats.trialMultiplier.toFixed(2)} · ДО ${nextRank}: +1 ИСПЫТАНИЕ`
+        : `ДО ${nextRank}: +1 ИСПЫТАНИЕ`
+      : `ИСПЫТАНИЯ ×${stats.trialMultiplier.toFixed(2)} · МАКСИМАЛЬНЫЙ РАНГ`
+    : `ИСПЫТАНИЯ ×${stats.trialMultiplier.toFixed(2)}`;
+  const showTrialLine = stats.victory || stats.trialMultiplier > 1;
+
+  const trialText = scene.add.text(0, 184, trialLine, {
+    fontFamily: UI_FONT.body,
+    fontSize: '12px',
+    fontStyle: 'bold',
+    color: '#7dd3fc',
+    letterSpacing: 2,
+  }).setOrigin(0.5).setVisible(showTrialLine);
 
   const primaryButton = createButton(scene, 0, 226, 340, 58, options.primaryLabel, {
     variant: 'primary',
@@ -1649,11 +1757,14 @@ export function drawVictoryScreen(
   onRetry: () => void,
   onBackToMenu: () => void
 ): void {
+  const rank = calculateRank(stats);
+  const style = RANK_STYLES[rank.letter];
+
   drawResultScreen(scene, overlay, stats, {
     badge: 'ПОБЕДА',
     title: 'КРИПТА ОЧИЩЕНА',
-    accent: 0xfbbf24,
-    accentHex: '#f0c674',
+    accent: style.accent,
+    accentHex: style.hex,
     primaryLabel: 'ЕЩЁ РАЗ',
     primaryTextColor: '#1a1205',
     onRetry,

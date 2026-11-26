@@ -2062,7 +2062,7 @@ export class GameScene extends Phaser.Scene {
       ? Math.round((this.shotsHit / this.shotsFired) * 100)
       : 0;
 
-    // Испытания умножают очки до ранга, рекорда и Эха. В HUD во время боя
+    // Испытания умножают очки до рекорда и Эха. В HUD во время боя
     // остаются «чистые» очки, бонус виден на экране итогов.
     const trialMultiplier = this.trialEffects.scoreMultiplier;
 
@@ -2081,6 +2081,7 @@ export class GameScene extends Phaser.Scene {
       echoGained: 0,
       echoMultiplier: 1,
       trialMultiplier,
+      trialsCount: this.profile.activeTrials.length,
       echoTotal: this.profile.echo,
       victory,
       newlyUnlockedLevel: null,

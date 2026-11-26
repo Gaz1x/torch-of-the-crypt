@@ -9,15 +9,16 @@ import {
   DEFAULT_UPGRADES,
   getUpgradeBonuses,
   getUpgradeCost,
+  getUpgradeMaxLevel,
   UPGRADES,
   type UpgradeKey,
   type UpgradeLevels,
 } from './upgrades';
 import { getMastery } from './mastery';
 import { isTrialKey, TRIAL_ORDER, type TrialKey } from './trials';
-import { LEVELS } from './waves';
+import { getLevelEchoMultiplier, LEVELS } from './waves';
 
-export type RankLetter = 'S' | 'A' | 'B';
+export type RankLetter = 'B' | 'A' | 'S' | 'SS' | 'SS+' | 'SSS' | 'SSS+';
 
 export interface RankResult {
   letter: RankLetter;
@@ -26,19 +27,24 @@ export interface RankResult {
 
 /** Минимум данных о забеге, нужный для расчёта ранга. */
 export interface RankStats {
-  wave: number;
-  wavesTotal: number;
   victory: boolean;
-  accuracy: number;
-  hp: number;
-  maxHp: number;
-  score: number;
+  /** Сколько испытаний было включено на старте спуска. */
+  trialsCount: number;
 }
 
-export const RANK_THRESHOLDS = {
-  S: 80,
-  A: 55,
-} as const;
+/** Ранги за победу по числу включённых испытаний. */
+export const VICTORY_RANKS = ['S', 'SS', 'SS+', 'SSS', 'SSS+'] as const;
+
+export const RANK_TITLES: Record<RankLetter, string> = {
+  B: 'ВЫЖИВШИЙ',
+  // A остался только в старых сохранениях: новые забеги его не выдают.
+  A: 'СТРАЖ КРИПТЫ',
+  S: 'ЛЕГЕНДА ПЛАМЕНИ',
+  SS: 'ХРАНИТЕЛЬ ОГНЯ',
+  'SS+': 'НЕСУЩИЙ СВЕТ',
+  SSS: 'ВЛАДЫКА ГЛУБИН',
+  'SSS+': 'ПОСЛЕДНИЙ ФАКЕЛ',
+};
 
 export const PROFILE_STORAGE_KEY = 'torch-of-the-crypt:profile:v1';
 export const PROFILE_VERSION = 1;
@@ -96,28 +102,35 @@ export const DEFAULT_PROFILE: Profile = {
   levelStats: LEVELS.map(() => ({ ...DEFAULT_LEVEL_STATS })),
 };
 
+/**
+ * Смерть всегда даёт B. Победа поднимает ранг на ступень за каждое
+ * включённое испытание: S → SS → SS+ → SSS → SSS+.
+ */
 export function calculateRank(stats: RankStats): RankResult {
-  const wavesPart =
-    ((stats.wave - 1 + (stats.victory ? 1 : 0)) / Math.max(1, stats.wavesTotal)) * 45;
-  const accuracyPart = (stats.accuracy / 100) * 15;
-  const hpPart = (stats.maxHp > 0 ? stats.hp / stats.maxHp : 0) * 20;
-  const scorePart = (Math.min(stats.score, 150) / 150) * 20;
-  const rating = wavesPart + accuracyPart + hpPart + scorePart;
+  if (!stats.victory) {
+    return { letter: 'B', title: RANK_TITLES.B };
+  }
 
-  if (rating >= RANK_THRESHOLDS.S) {
-    return { letter: 'S', title: 'ЛЕГЕНДА ПЛАМЕНИ' };
-  }
-  if (rating >= RANK_THRESHOLDS.A) {
-    return { letter: 'A', title: 'СТРАЖ КРИПТЫ' };
-  }
-  return { letter: 'B', title: 'ВЫЖИВШИЙ' };
+  const index = Math.min(
+    VICTORY_RANKS.length - 1,
+    Math.max(0, Math.floor(stats.trialsCount))
+  );
+  const letter = VICTORY_RANKS[index];
+  return { letter, title: RANK_TITLES[letter] };
 }
 
+const RANK_WEIGHTS: Record<RankLetter, number> = {
+  B: 1,
+  A: 2,
+  S: 3,
+  SS: 4,
+  'SS+': 5,
+  SSS: 6,
+  'SSS+': 7,
+};
+
 export function rankWeight(letter: RankLetter | null): number {
-  if (letter === 'S') return 3;
-  if (letter === 'A') return 2;
-  if (letter === 'B') return 1;
-  return 0;
+  return letter === null ? 0 : RANK_WEIGHTS[letter];
 }
 
 /**
@@ -150,7 +163,7 @@ export interface RunSummary {
 export interface RunReward {
   profile: Profile;
   echoGained: number;
-  /** Общий множитель Эха: «Щедрая тьма» × мастерство локации. */
+  /** Общий множитель Эха: «Щедрая тьма» × мастерство × локация. */
   echoMultiplier: number;
   newBestScore: boolean;
   newBestTime: boolean;
@@ -159,10 +172,13 @@ export interface RunReward {
 
 /** Записывает результат забега в профиль и начисляет Эхо. */
 export function applyRun(profile: Profile, run: RunSummary): RunReward {
-  // Улучшение «Щедрая тьма» и мастерство локации умножают добычу.
+  // «Щедрая тьма», мастерство и сама локация умножают добычу.
   const bonuses = getUpgradeBonuses(profile.upgrades);
   const levelVictories = profile.levelStats[run.levelIndex]?.victories ?? 0;
-  const echoMultiplier = bonuses.echoMultiplier * getMastery(levelVictories).echoMultiplier;
+  const echoMultiplier =
+    bonuses.echoMultiplier *
+    getMastery(levelVictories).echoMultiplier *
+    getLevelEchoMultiplier(run.levelIndex);
   const echoGained = calculateEcho(run.score, run.bossesKilled, run.victory, echoMultiplier);
   const newBestScore = run.score > profile.bestScore;
   const newBestTime = run.survivalTime > profile.bestTime;
@@ -211,7 +227,7 @@ export interface UpgradePurchase {
 export function purchaseUpgrade(profile: Profile, key: UpgradeKey): UpgradePurchase {
   const definition = UPGRADES[key];
   const level = profile.upgrades[key];
-  const cost = getUpgradeCost(key, level);
+  const cost = getUpgradeCost(key, level, profile.unlockedLevels);
 
   if (cost === null) {
     return { ok: false, profile, message: 'Улучшение уже максимальное' };
@@ -243,11 +259,15 @@ function toSafeInt(value: unknown, fallback = 0): number {
   return Math.max(0, Math.floor(value));
 }
 
+const RANK_LETTERS: RankLetter[] = ['B', 'A', 'S', 'SS', 'SS+', 'SSS', 'SSS+'];
+
 function sanitizeRank(value: unknown): RankLetter | null {
-  return value === 'S' || value === 'A' || value === 'B' ? value : null;
+  return typeof value === 'string' && (RANK_LETTERS as string[]).includes(value)
+    ? (value as RankLetter)
+    : null;
 }
 
-function sanitizeUpgrades(raw: unknown): UpgradeLevels {
+function sanitizeUpgrades(raw: unknown, unlockedLevels: number): UpgradeLevels {
   const data = typeof raw === 'object' && raw !== null
     ? (raw as Partial<Record<UpgradeKey, unknown>>)
     : {};
@@ -255,7 +275,7 @@ function sanitizeUpgrades(raw: unknown): UpgradeLevels {
   const result: UpgradeLevels = { ...DEFAULT_UPGRADES };
   for (const key of Object.keys(DEFAULT_UPGRADES) as UpgradeKey[]) {
     const level = toSafeInt(data[key]);
-    result[key] = Math.min(UPGRADES[key].maxLevel, level);
+    result[key] = Math.min(getUpgradeMaxLevel(key, unlockedLevels), level);
   }
   return result;
 }
@@ -304,6 +324,10 @@ function sanitizeProfile(raw: unknown): Profile {
   if (typeof raw !== 'object' || raw === null) return emptyProfile();
 
   const data = raw as Partial<Record<keyof Profile, unknown>>;
+  const unlockedLevels = Math.min(
+    LEVELS.length,
+    Math.max(1, toSafeInt(data.unlockedLevels, 1))
+  );
   return {
     version: PROFILE_VERSION,
     echo: toSafeInt(data.echo),
@@ -315,9 +339,9 @@ function sanitizeProfile(raw: unknown): Profile {
       ? Math.max(0, data.bestTime)
       : 0,
     bestRank: sanitizeRank(data.bestRank),
-    upgrades: sanitizeUpgrades(data.upgrades),
+    upgrades: sanitizeUpgrades(data.upgrades, unlockedLevels),
     activeTrials: sanitizeTrials(data.activeTrials),
-    unlockedLevels: Math.min(LEVELS.length, Math.max(1, toSafeInt(data.unlockedLevels, 1))),
+    unlockedLevels,
     levelStats: sanitizeLevelStats(data.levelStats),
   };
 }

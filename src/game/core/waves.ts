@@ -383,3 +383,17 @@ export const LEVELS: LevelConfig[] = [
     ],
   },
 ];
+
+/**
+ * Множитель Эха за спуск: поздние локации опаснее и платят больше.
+ * Индекс совпадает с LEVELS; для будущих локаций берётся последнее значение.
+ */
+export const LEVEL_ECHO_MULTIPLIERS = [1, 1.2, 1.45] as const;
+
+export function getLevelEchoMultiplier(levelIndex: number): number {
+  const index = Math.min(
+    Math.max(0, Math.floor(levelIndex)),
+    LEVEL_ECHO_MULTIPLIERS.length - 1
+  );
+  return LEVEL_ECHO_MULTIPLIERS[index];
+}

@@ -14,6 +14,12 @@ import {
   type UpgradeKey,
 } from '../core/upgrades';
 import { getMastery, MASTERY_STEPS } from '../core/mastery';
+import {
+  getTrialMultiplier,
+  TRIAL_ORDER,
+  TRIALS,
+  type TrialKey,
+} from '../core/trials';
 import { drawHubBackground } from './hubBackground';
 import {
   createButton,
@@ -119,6 +125,8 @@ export interface GameOverStats {
   echoGained: number;
   /** Множитель Эха за спуск (улучшение и мастерство): 1 — без бонусов. */
   echoMultiplier: number;
+  /** Множитель очков за включённые испытания: 1 — без испытаний. */
+  trialMultiplier: number;
   /** Сколько Эха всего накоплено в профиле. */
   echoTotal: number;
   victory: boolean;
@@ -147,6 +155,7 @@ export interface SettingsController {
 export interface ProfileController {
   getProfile: () => Profile;
   buyUpgrade: (key: UpgradeKey) => { ok: boolean; message: string };
+  setTrials: (trials: TrialKey[]) => void;
 }
 
 /** Затемнение, виньетка и угли — общий фон всех меню. */
@@ -760,6 +769,218 @@ function createUpgradesModal(
 }
 
 // ============================================================================
+// ИСПЫТАНИЯ
+// ============================================================================
+
+interface TrialsModal {
+  open: () => void;
+}
+
+interface TrialCardRef {
+  key: TrialKey;
+  container: Phaser.GameObjects.Container;
+  baseY: number;
+  toggle: ReturnType<typeof createButton>;
+}
+
+function createTrialsModal(
+  scene: Phaser.Scene,
+  screen: Phaser.GameObjects.Container,
+  controller: ProfileController,
+  onTrialsChanged: () => void
+): TrialsModal {
+  const { width, height } = scene.scale;
+  const modal = scene.add.container(0, 0).setVisible(false).setAlpha(0);
+
+  const backdrop = scene.add
+    .rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.72)
+    .setInteractive();
+  modal.add(backdrop);
+
+  const panel = createPanel(scene, 160, 48, 960, 624, UI_COLORS.mana, { glow: true });
+  modal.add(panel);
+
+  const title = scene.add.text(640, 94, 'ИСПЫТАНИЯ', {
+    fontFamily: UI_FONT.display,
+    fontSize: '32px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const divider = createDivider(scene, 640, 128, 520, UI_COLORS.mana);
+
+  // Итоговый множитель живёт в правом верхнем углу, как кошелёк в улучшениях.
+  const multiplierText = scene.add.text(1108, 94, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '14px',
+    fontStyle: 'bold',
+    color: '#7dd3fc',
+    letterSpacing: 1,
+  }).setOrigin(1, 0.5);
+
+  const hintText = scene.add.text(1108, 116, 'действуют на следующий спуск', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    color: '#94a3b8',
+  }).setOrigin(1, 0.5);
+
+  const iconByKey: Record<TrialKey, 'banner' | 'flame' | 'clock' | 'skull'> = {
+    GLASS: 'banner',
+    DIM_TORCH: 'flame',
+    FAST_DARK: 'clock',
+    CROWD: 'skull',
+  };
+
+  const cards: TrialCardRef[] = TRIAL_ORDER.map((key, index) => {
+    const definition = TRIALS[key];
+    const y = 132 + index * 94;
+    const iconKind = iconByKey[key];
+
+    const cardContainer = scene.add.container(0, y);
+    const cardPanel = createPanel(scene, 220, 0, 840, 86, 0x4b5d77);
+    const icon = createIcon(scene, 264, 43, iconKind, 26, UI_COLORS.mana);
+
+    const name = scene.add.text(296, 6, definition.name, {
+      fontFamily: UI_FONT.display,
+      fontSize: '16px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+      letterSpacing: 1,
+    });
+
+    const description = scene.add.text(296, 28, definition.description, {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      color: '#c3cedd',
+      lineSpacing: 2,
+      wordWrap: { width: 430 },
+    });
+
+    const effect = scene.add.text(296, 58, definition.effect, {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+    });
+
+    const multiplier = scene.add.text(1040, 8, `×${definition.multiplier.toFixed(2)}`, {
+      fontFamily: UI_FONT.body,
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#94a3b8',
+      letterSpacing: 1,
+    }).setOrigin(1, 0);
+
+    const toggle = createButton(scene, 960, 50, 170, 34, '', {
+      variant: 'secondary',
+      accent: UI_COLORS.mana,
+      accentHex: '#04121f',
+      onClick: () => handleToggle(key),
+      fontSize: 11,
+    });
+
+    cardContainer.add([
+      cardPanel,
+      icon,
+      name,
+      description,
+      effect,
+      multiplier,
+      toggle.container,
+    ]);
+    modal.add(cardContainer);
+
+    return { key, container: cardContainer, baseY: y, toggle };
+  });
+
+  const refresh = (): void => {
+    const active = new Set(controller.getProfile().activeTrials);
+    multiplierText.setText(`МНОЖИТЕЛЬ ×${getTrialMultiplier(active).toFixed(2)}`);
+
+    for (const card of cards) {
+      const enabled = active.has(card.key);
+      card.toggle.label.setText(enabled ? 'ВКЛЮЧЕНО' : 'ВЫКЛЮЧЕНО');
+
+      if (enabled) {
+        card.toggle.label.setColor('#04121f');
+        card.toggle.background.setFillStyle(UI_COLORS.mana, 0.96);
+        card.container.setAlpha(1);
+      } else {
+        card.toggle.label.setColor('#94a3b8');
+        card.toggle.background.setFillStyle(0x1e293b, 0.9);
+        card.container.setAlpha(0.82);
+      }
+    }
+  };
+
+  function handleToggle(key: TrialKey): void {
+    const active = new Set(controller.getProfile().activeTrials);
+    if (active.has(key)) {
+      active.delete(key);
+    } else {
+      active.add(key);
+    }
+
+    // Порядок фиксирован, чтобы профиль не зависел от кликов.
+    const next = TRIAL_ORDER.filter((trial) => active.has(trial));
+    controller.setTrials(next);
+    track('trials_changed', {
+      trials: next.join(','),
+      multiplier: Number(getTrialMultiplier(next).toFixed(2)),
+    });
+    refresh();
+    onTrialsChanged();
+  }
+
+  const closeButton = createButton(scene, 640, 626, 220, 46, 'ЗАКРЫТЬ', {
+    variant: 'secondary',
+    onClick: () => close(),
+    fontSize: 13,
+  });
+
+  modal.add([title, divider, multiplierText, hintText, closeButton.container]);
+  screen.add(modal);
+
+  const open = (): void => {
+    refresh();
+    modal.setVisible(true);
+    modal.setAlpha(0);
+    scene.tweens.add({
+      targets: modal,
+      alpha: 1,
+      duration: 220,
+      ease: 'Quad.easeOut',
+    });
+
+    cards.forEach((card, index) => {
+      scene.tweens.killTweensOf(card.container);
+      card.container.setAlpha(0);
+      card.container.y = card.baseY + 14;
+      scene.tweens.add({
+        targets: card.container,
+        y: card.baseY,
+        alpha: 1,
+        delay: 80 + index * 60,
+        duration: 280,
+        ease: 'Cubic.easeOut',
+      });
+    });
+  };
+
+  function close(): void {
+    scene.tweens.add({
+      targets: modal,
+      alpha: 0,
+      duration: 140,
+      onComplete: () => modal.setVisible(false),
+    });
+  }
+
+  return { open };
+}
+
+// ============================================================================
 // ХАБ / СТАРТОВЫЙ ЭКРАН
 // ============================================================================
 
@@ -960,13 +1181,28 @@ export function drawStartScreen(
     fontSize: 13,
   });
 
-  const helpButton = createButton(scene, menuX, 462, 320, 50, 'ПАМЯТКА', {
+  const helpButton = createButton(scene, menuX - 84, 462, 152, 50, 'ПАМЯТКА', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => help.open(),
-    fontSize: 13,
+    fontSize: 12,
   });
+
+  const trialsButton = createButton(scene, menuX + 84, 462, 152, 50, 'ИСПЫТАНИЯ', {
+    variant: 'ghost',
+    accent: UI_COLORS.brass,
+    accentHex: '#f0c674',
+    onClick: () => trials.open(),
+    fontSize: 12,
+  });
+
+  /** Кнопка показывает, сколько испытаний включено прямо сейчас. */
+  const refreshTrialsButton = (): void => {
+    const count = profileController.getProfile().activeTrials.length;
+    trialsButton.label.setText(count > 0 ? `ИСПЫТАНИЯ · ${count}` : 'ИСПЫТАНИЯ');
+    trialsButton.label.setColor(count > 0 ? '#7dd3fc' : '#f0c674');
+  };
 
   // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
   // Три ряда: заголовок, две ячейки (Эхо и ранг) и две строки итогов.
@@ -1060,6 +1296,7 @@ export function drawStartScreen(
     upgradesButton.container,
     settingsButton.container,
     helpButton.container,
+    trialsButton.container,
     statsPanel,
     statsHeader,
     statsDivider,
@@ -1076,6 +1313,8 @@ export function drawStartScreen(
   const help = createHelpModal(scene, screen);
   const settingsModal = createSettingsModal(scene, screen, settingsController);
   const upgradesModal = createUpgradesModal(scene, screen, profileController, refreshStats);
+  const trials = createTrialsModal(scene, screen, profileController, refreshTrialsButton);
+  refreshTrialsButton();
 
   scene.tweens.add({
     targets: emblemGlow,
@@ -1250,7 +1489,7 @@ function drawResultScreen(
 
   const footnote = scene.add.text(
     0,
-    146,
+    140,
     stats.newlyUnlockedLevel !== null
       ? `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled} · Открыта локация ${
           FLOOR_ROMAN[stats.newlyUnlockedLevel - 1] ?? stats.newlyUnlockedLevel
@@ -1266,7 +1505,7 @@ function drawResultScreen(
 
   const echoText = scene.add.text(
     0,
-    170,
+    162,
     stats.echoMultiplier > 1
       ? `+${stats.echoGained} ЭХА · ×${stats.echoMultiplier.toFixed(2)} · ВСЕГО ${stats.echoTotal}`
       : `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
@@ -1279,7 +1518,21 @@ function drawResultScreen(
     }
   ).setOrigin(0.5);
 
-  const primaryButton = createButton(scene, 0, 218, 340, 58, options.primaryLabel, {
+  // Строка появляется только при включённых испытаниях.
+  const trialText = scene.add.text(
+    0,
+    184,
+    `ИСПЫТАНИЯ ×${stats.trialMultiplier.toFixed(2)}`,
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '12px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+      letterSpacing: 2,
+    }
+  ).setOrigin(0.5).setVisible(stats.trialMultiplier > 1);
+
+  const primaryButton = createButton(scene, 0, 226, 340, 58, options.primaryLabel, {
     variant: 'primary',
     accent: options.accent,
     accentHex: options.primaryTextColor,
@@ -1287,7 +1540,7 @@ function drawResultScreen(
     fontSize: 17,
   });
 
-  const secondaryButton = createButton(scene, 0, 280, 300, 46, 'В ЛАГЕРЬ', {
+  const secondaryButton = createButton(scene, 0, 284, 300, 46, 'В ЛАГЕРЬ', {
     variant: 'secondary',
     onClick: options.onBackToMenu,
     fontSize: 14,
@@ -1301,6 +1554,7 @@ function drawResultScreen(
     rankTitle,
     footnote,
     echoText,
+    trialText,
     primaryButton.container,
     secondaryButton.container,
   ]);

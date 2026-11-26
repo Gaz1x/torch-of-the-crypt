@@ -14,6 +14,7 @@ import {
   type UpgradeLevels,
 } from './upgrades';
 import { getMastery } from './mastery';
+import { isTrialKey, TRIAL_ORDER, type TrialKey } from './trials';
 import { LEVELS } from './waves';
 
 export type RankLetter = 'S' | 'A' | 'B';
@@ -64,6 +65,8 @@ export interface Profile {
   bestTime: number;
   bestRank: RankLetter | null;
   upgrades: UpgradeLevels;
+  /** Включённые испытания: действуют на следующий спуск и хранятся в профиле. */
+  activeTrials: TrialKey[];
   /** Сколько локаций открыто: 1 — только первая. */
   unlockedLevels: number;
   /** Рекорды по каждой локации, индекс совпадает с LEVELS. */
@@ -88,6 +91,7 @@ export const DEFAULT_PROFILE: Profile = {
   bestTime: 0,
   bestRank: null,
   upgrades: { ...DEFAULT_UPGRADES },
+  activeTrials: [],
   unlockedLevels: 1,
   levelStats: LEVELS.map(() => ({ ...DEFAULT_LEVEL_STATS })),
 };
@@ -256,6 +260,18 @@ function sanitizeUpgrades(raw: unknown): UpgradeLevels {
   return result;
 }
 
+function sanitizeTrials(raw: unknown): TrialKey[] {
+  if (!Array.isArray(raw)) return [];
+
+  const enabled = new Set<TrialKey>();
+  for (const value of raw) {
+    if (isTrialKey(value)) enabled.add(value);
+  }
+
+  // Порядок карточек не зависит от порядка в сохранении.
+  return TRIAL_ORDER.filter((key) => enabled.has(key));
+}
+
 function sanitizeLevelStats(raw: unknown): LevelStats[] {
   const data = Array.isArray(raw) ? raw : [];
   return LEVELS.map((_, index) => {
@@ -279,6 +295,7 @@ function emptyProfile(): Profile {
   return {
     ...DEFAULT_PROFILE,
     upgrades: { ...DEFAULT_UPGRADES },
+    activeTrials: [],
     levelStats: DEFAULT_PROFILE.levelStats.map((stats) => ({ ...stats })),
   };
 }
@@ -299,6 +316,7 @@ function sanitizeProfile(raw: unknown): Profile {
       : 0,
     bestRank: sanitizeRank(data.bestRank),
     upgrades: sanitizeUpgrades(data.upgrades),
+    activeTrials: sanitizeTrials(data.activeTrials),
     unlockedLevels: Math.min(LEVELS.length, Math.max(1, toSafeInt(data.unlockedLevels, 1))),
     levelStats: sanitizeLevelStats(data.levelStats),
   };

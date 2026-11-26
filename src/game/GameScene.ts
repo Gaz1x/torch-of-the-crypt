@@ -14,6 +14,7 @@ import {
   type Profile,
 } from './core/profile';
 import { getMastery } from './core/mastery';
+import { getTrialEffects, getTrialMultiplier, type TrialEffects, type TrialKey } from './core/trials';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
 import { startAttempt, track } from './core/analytics';
 import {
@@ -121,6 +122,8 @@ export class GameScene extends Phaser.Scene {
   private lightMultiplier = 1;
   /** Множитель перезарядки из улучшения «Быстрая рука». */
   private cooldownMultiplier = 1;
+  /** Поправки включённых испытаний: свет, фазы, волны и итоговые очки. */
+  private trialEffects: TrialEffects = getTrialEffects(new Set());
   /** Защита от повторной записи одного и того же забега. */
   private runRecorded = false;
 
@@ -360,14 +363,25 @@ export class GameScene extends Phaser.Scene {
     return controller;
   }
 
-  /** Пересчитывает характеристики стража из улучшений и мастерства локации. */
+  /** Пересчитывает характеристики стража из улучшений, мастерства и испытаний. */
   private applyProfileBonuses(): void {
     const bonuses = getUpgradeBonuses(this.profile.upgrades);
     const mastery = getMastery(this.profile.levelStats[this.levelIndex]?.victories ?? 0);
-    this.maxHp = GAME_CONFIG.PLAYER.MAX_HP + bonuses.maxHpBonus + mastery.hpBonus;
+    const trials = getTrialEffects(new Set(this.profile.activeTrials));
+    this.trialEffects = trials;
+
+    // «Стеклянный страж» отменяет любые бонусы здоровья.
+    this.maxHp =
+      trials.maxHpOverride ?? GAME_CONFIG.PLAYER.MAX_HP + bonuses.maxHpBonus + mastery.hpBonus;
     this.startMana = GAME_CONFIG.COMBAT.START_MANA + bonuses.startManaBonus;
-    this.lightMultiplier = bonuses.lightMultiplier;
+    this.lightMultiplier = bonuses.lightMultiplier * trials.lightMultiplier;
     this.cooldownMultiplier = bonuses.cooldownMultiplier;
+  }
+
+  /** Дары не могут поднять максимум выше «Стеклянного стража». */
+  private raiseMaxHp(amount: number): void {
+    if (this.trialEffects.maxHpOverride !== null) return;
+    this.maxHp += amount;
   }
 
   private getProfileController(): ProfileController {
@@ -381,6 +395,10 @@ export class GameScene extends Phaser.Scene {
           this.applyProfileBonuses();
         }
         return { ok: result.ok, message: result.message };
+      },
+      setTrials: (trials: TrialKey[]) => {
+        this.profile = { ...this.profile, activeTrials: [...trials] };
+        saveProfile(this.profile);
       },
     };
   }
@@ -1001,10 +1019,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.waveSpawned < wave.spawnCount) {
+    if (this.waveSpawned < this.getWaveSpawnCount(wave)) {
       this.waveSpawnTimer -= dt;
 
-      if (this.waveSpawnTimer <= 0 && this.enemies.length < wave.maxAlive) {
+      if (this.waveSpawnTimer <= 0 && this.enemies.length < this.getWaveMaxAlive(wave)) {
         const guaranteed = this.guaranteedQueue.shift();
         const type = guaranteed ?? this.pickWaveEnemy(wave);
         this.spawnEnemy(type);
@@ -1013,9 +1031,19 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    if (this.waveSpawned >= wave.spawnCount && this.enemies.length === 0) {
+    if (this.waveSpawned >= this.getWaveSpawnCount(wave) && this.enemies.length === 0) {
       this.completeWave();
     }
+  }
+
+  /** Сколько врагов в волне: испытание «Теснота» добавляет четверть. */
+  private getWaveSpawnCount(wave: WaveConfig): number {
+    return Math.ceil(wave.spawnCount * this.trialEffects.spawnMultiplier);
+  }
+
+  /** Предел одновременно живых врагов с учётом «Тесноты». */
+  private getWaveMaxAlive(wave: WaveConfig): number {
+    return wave.maxAlive + this.trialEffects.maxAliveBonus;
   }
 
   /** Свита босса: не больше maxAlive живых мобов, новые появляются по таймеру. */
@@ -1085,7 +1113,7 @@ export class GameScene extends Phaser.Scene {
 
     const detail = wave.boss
       ? 'Хранитель крипты вышел на охоту · не дайте факелу погаснуть'
-      : `${wave.spawnCount} теней · не дайте факелу погаснуть`;
+      : `${this.getWaveSpawnCount(wave)} теней · не дайте факелу погаснуть`;
     showWaveNotice(this, index + 1, this.level.waves.length, wave.name, detail);
 
     if (wave.boss) {
@@ -1145,7 +1173,7 @@ export class GameScene extends Phaser.Scene {
 
     // Стойкость повышает запас сразу, остальные дары читаются в бою.
     if (key === 'VITALITY') {
-      this.maxHp += 1;
+      this.raiseMaxHp(1);
       this.hp = Math.min(this.maxHp, this.hp + 1);
     }
 
@@ -1164,7 +1192,7 @@ export class GameScene extends Phaser.Scene {
 
     const key = BOON_ORDER[Math.floor(Math.random() * BOON_ORDER.length)];
     this.boons.add(key);
-    if (key === 'VITALITY') this.maxHp += 1;
+    if (key === 'VITALITY') this.raiseMaxHp(1);
 
     showMasteryNotice(this, BOONS[key].name, BOONS[key].effect);
     track('mastery_boon', { location: this.levelIndex + 1, boon: key });
@@ -1806,13 +1834,13 @@ export class GameScene extends Phaser.Scene {
 
   private updateHUD(dt: number): void {
     const wave = this.level.waves[this.waveIndex];
-    const phase = getPhaseProgress(this.score);
+    const phase = getPhaseProgress(this.score, this.trialEffects.phaseThresholdMultiplier);
     const bossEntity = this.enemies.find((e) => e.isBoss);
 
     // Сколько врагов ещё осталось побить в текущей волне:
     // непоявившиеся + уже на поле.
     const pendingSpawns = wave && !wave.boss
-      ? Math.max(0, wave.spawnCount - this.waveSpawned)
+      ? Math.max(0, this.getWaveSpawnCount(wave) - this.waveSpawned)
       : 0;
     const addsAlive = wave?.boss
       ? this.enemies.filter((e) => !e.isBoss).length
@@ -1971,6 +1999,13 @@ export class GameScene extends Phaser.Scene {
     this.resetPlayerPosition();
     this.applyProfileBonuses();
 
+    if (this.profile.activeTrials.length > 0) {
+      track('trial_start', {
+        trials: this.profile.activeTrials.join(','),
+        multiplier: Number(getTrialMultiplier(this.profile.activeTrials).toFixed(2)),
+      });
+    }
+
     // Дар мастерства выдаётся до восстановления HP: «Стойкость» сразу
     // повышает максимум, и запас заполняется уже с учётом бонуса.
     this.boons.clear();
@@ -2027,8 +2062,12 @@ export class GameScene extends Phaser.Scene {
       ? Math.round((this.shotsHit / this.shotsFired) * 100)
       : 0;
 
+    // Испытания умножают очки до ранга, рекорда и Эха. В HUD во время боя
+    // остаются «чистые» очки, бонус виден на экране итогов.
+    const trialMultiplier = this.trialEffects.scoreMultiplier;
+
     return {
-      score: this.score,
+      score: Math.round(this.score * trialMultiplier),
       killsCount: this.killsCount,
       survivalTime: this.survivalTime,
       manaCollected: this.manaCollected,
@@ -2041,6 +2080,7 @@ export class GameScene extends Phaser.Scene {
       maxHp: this.maxHp,
       echoGained: 0,
       echoMultiplier: 1,
+      trialMultiplier,
       echoTotal: this.profile.echo,
       victory,
       newlyUnlockedLevel: null,
@@ -2204,7 +2244,7 @@ export class GameScene extends Phaser.Scene {
 
   /** Условие смены фазы живёт в core/phases.ts (функция getPhase). */
   private checkPhaseChange(): void {
-    const next = getPhase(this.score);
+    const next = getPhase(this.score, this.trialEffects.phaseThresholdMultiplier);
     if (next === this.currentPhase) return;
 
     this.currentPhase = next;

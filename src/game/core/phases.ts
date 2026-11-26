@@ -72,15 +72,22 @@ export interface PhaseProgress {
   progress: number;
 }
 
-/** То же условие, что и в getPhase, но с данными для шкалы HUD. */
-export function getPhaseProgress(totalScore: number): PhaseProgress {
-  const { LIGHT_SCORE, DARK_SCORE } = PHASE_SCORING;
+/**
+ * То же условие, что и в getPhase, но с данными для шкалы HUD.
+ * thresholdMultiplier меньше 1 ускоряет смену фаз (испытание «Быстрая тьма»).
+ */
+export function getPhaseProgress(
+  totalScore: number,
+  thresholdMultiplier = 1
+): PhaseProgress {
+  const LIGHT_SCORE = PHASE_SCORING.LIGHT_SCORE * thresholdMultiplier;
+  const DARK_SCORE = PHASE_SCORING.DARK_SCORE * thresholdMultiplier;
 
   if (totalScore < LIGHT_SCORE) {
     return {
       phase: 'LIGHT',
       next: 'DARK',
-      pointsToNext: LIGHT_SCORE - totalScore,
+      pointsToNext: Math.ceil(LIGHT_SCORE - totalScore),
       phaseLength: LIGHT_SCORE,
       progress: totalScore / LIGHT_SCORE,
     };
@@ -94,7 +101,7 @@ export function getPhaseProgress(totalScore: number): PhaseProgress {
     return {
       phase: 'DARK',
       next: 'LIGHT',
-      pointsToNext: DARK_SCORE - position,
+      pointsToNext: Math.ceil(DARK_SCORE - position),
       phaseLength: DARK_SCORE,
       progress: position / DARK_SCORE,
     };
@@ -104,7 +111,7 @@ export function getPhaseProgress(totalScore: number): PhaseProgress {
   return {
     phase: 'LIGHT',
     next: 'DARK',
-    pointsToNext: LIGHT_SCORE - lightElapsed,
+    pointsToNext: Math.ceil(LIGHT_SCORE - lightElapsed),
     phaseLength: LIGHT_SCORE,
     progress: lightElapsed / LIGHT_SCORE,
   };
@@ -116,8 +123,9 @@ export function getPhaseProgress(totalScore: number): PhaseProgress {
  * ровно DARK_SCORE очков, потом снова свет — и так по кругу.
  * Нужно другое правило (по времени, здоровью) — меняется только эта функция.
  */
-export function getPhase(totalScore: number): PhaseKey {
-  const { LIGHT_SCORE, DARK_SCORE } = PHASE_SCORING;
+export function getPhase(totalScore: number, thresholdMultiplier = 1): PhaseKey {
+  const LIGHT_SCORE = PHASE_SCORING.LIGHT_SCORE * thresholdMultiplier;
+  const DARK_SCORE = PHASE_SCORING.DARK_SCORE * thresholdMultiplier;
   const inDark = totalScore - LIGHT_SCORE;
 
   if (inDark < 0) return 'LIGHT';

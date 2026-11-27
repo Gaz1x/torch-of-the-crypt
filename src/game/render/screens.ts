@@ -18,6 +18,20 @@ import {
   type UpgradeKey,
 } from '../core/upgrades';
 import { getMastery, MASTERY_STEPS } from '../core/mastery';
+import { ACHIEVEMENTS, countUnlocked, getAchievement } from '../core/achievements';
+import {
+  getNextPalette,
+  getPalette,
+  isPaletteUnlocked,
+  PALETTES,
+} from '../core/cosmetics';
+import { BESTIARY_ENTRIES, countDiscovered } from '../core/bestiary';
+import { GAME_CONFIG, type EnemyTypeKey } from '../core/gameConfig';
+import { BOSS_CONFIG, type BossTypeKey } from '../core/bosses';
+import { LEVELS } from '../core/waves';
+import { createEnemyVisual } from './enemyArt';
+import { createBossVisual } from './bossArt';
+import { applyPlayerPalette, createPlayer } from './playerArt';
 import {
   getTrialMultiplier,
   TRIAL_ORDER,
@@ -164,6 +178,8 @@ export interface GameOverStats {
   victory: boolean;
   /** Номер локации, открытой этой победой (если открылась новая). */
   newlyUnlockedLevel: number | null;
+  /** Достижения, открытые именно этим спуском. */
+  newAchievements: string[];
 }
 
 /** Выбор локации на главном экране. */
@@ -188,6 +204,7 @@ export interface ProfileController {
   getProfile: () => Profile;
   buyUpgrade: (key: UpgradeKey) => { ok: boolean; message: string };
   setTrials: (trials: TrialKey[]) => void;
+  selectAppearance: (id: string) => void;
 }
 
 /** Затемнение, виньетка и угли — общий фон всех меню. */
@@ -1074,6 +1091,554 @@ function createTrialsModal(
 }
 
 // ============================================================================
+// КНИГА СТРАЖА
+// Четыре вкладки: достижения, бестиарий, мастерство и облик. Книга только
+// читает профиль; единственное изменение — выбор облика (косметика).
+// ============================================================================
+
+type BookTab = 'ACHIEVEMENTS' | 'BESTIARY' | 'MASTERY' | 'LOOK';
+
+interface GuardBookModal {
+  open: () => void;
+}
+
+function createGuardBookModal(
+  scene: Phaser.Scene,
+  screen: Phaser.GameObjects.Container,
+  controller: ProfileController
+): GuardBookModal {
+  const { width, height } = scene.scale;
+  const modal = scene.add.container(0, 0).setVisible(false).setAlpha(0);
+
+  const backdrop = scene.add
+    .rectangle(width / 2, height / 2, width, height, UI_COLORS.void, 0.72)
+    .setInteractive();
+  modal.add(backdrop);
+
+  const panel = createPanel(scene, 160, 48, 960, 624, UI_COLORS.brass, { glow: true });
+  const title = scene.add.text(640, 88, 'КНИГА СТРАЖА', {
+    fontFamily: UI_FONT.display,
+    fontSize: '30px',
+    fontStyle: 'bold',
+    color: '#f4ecd8',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const subtitle = scene.add.text(640, 116, 'ДОСТИЖЕНИЯ · БЕСТИАРИЙ · МАСТЕРСТВО · ОБЛИК', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const divider = createDivider(scene, 640, 136, 520, UI_COLORS.brass);
+
+  // Арт врагов создаётся с бесконечными твинами. В книге они не нужны:
+  // без остановки твины копились бы при каждом пересоздании лагеря.
+  const freezeVisual = (object: Phaser.GameObjects.GameObject): void => {
+    scene.tweens.killTweensOf(object);
+    if (object instanceof Phaser.GameObjects.Container) {
+      for (const child of object.list) {
+        freezeVisual(child as Phaser.GameObjects.GameObject);
+      }
+    }
+  };
+
+  const tabDefs: { id: BookTab; label: string }[] = [
+    { id: 'ACHIEVEMENTS', label: 'ДОСТИЖЕНИЯ' },
+    { id: 'BESTIARY', label: 'БЕСТИАРИЙ' },
+    { id: 'MASTERY', label: 'МАСТЕРСТВО' },
+    { id: 'LOOK', label: 'ОБЛИК' },
+  ];
+
+  const tabButtons = tabDefs.map(({ id, label }, index) => {
+    const container = scene.add.container(322 + index * 212, 160);
+    const bg = scene.add
+      .rectangle(0, 0, 200, 32, 0x0f1626, 0.95)
+      .setStrokeStyle(2, UI_COLORS.brass, 0.8)
+      .setInteractive({ useHandCursor: true });
+    const text = scene.add.text(0, 0, label, {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      letterSpacing: 1,
+    }).setOrigin(0.5);
+
+    bg.on('pointerdown', () => setTab(id));
+    container.add([bg, text]);
+    return { id, container, bg, text };
+  });
+
+  // ---------------------------------------------------------------- ДОСТИЖЕНИЯ
+  const achievementsContent = scene.add.container(0, 0);
+  const achievementsHeader = scene.add.text(206, 182, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 1,
+  });
+  const achievementsHint = scene.add.text(1074, 182, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    color: '#7c8ba1',
+  }).setOrigin(1, 0);
+
+  const achievementCards = ACHIEVEMENTS.map((definition, index) => {
+    const column = index % 3;
+    const row = Math.floor(index / 3);
+    const card = scene.add.container(350 + column * 290, 198 + row * 80);
+    const cardPanel = createPanel(scene, -140, 0, 280, 74, 0x4b5d77, { alpha: 0.95 });
+    const diamond = scene.add.rectangle(-116, 24, 10, 10, UI_COLORS.panelLine, 0.6).setAngle(45);
+    const name = scene.add.text(-96, 12, definition.name, {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#7c8ba1',
+      letterSpacing: 1,
+    });
+    const description = scene.add.text(-96, 32, definition.description, {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      color: '#64748b',
+      wordWrap: { width: 214 },
+    });
+    const status = scene.add.text(124, 12, '', {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: '#64748b',
+    }).setOrigin(1, 0);
+
+    card.add([cardPanel, diamond, name, description, status]);
+    achievementsContent.add(card);
+    return { definition, card, cardPanel, diamond, name, description, status };
+  });
+
+  const refreshAchievements = (): void => {
+    const profile = controller.getProfile();
+    const unlocked = new Set(profile.achievements);
+    const count = countUnlocked(profile);
+    achievementsHeader.setText(`ОТКРЫТО ${count} / ${ACHIEVEMENTS.length}`);
+    const next = getNextPalette(count);
+    achievementsHint.setText(
+      next
+        ? `СЛЕДУЮЩИЙ ОБЛИК: «${next.palette.name}» · ЕЩЁ ${next.remaining}`
+        : 'ВСЕ ОБЛИКИ ОТКРЫТЫ'
+    );
+
+    for (const card of achievementCards) {
+      const done = unlocked.has(card.definition.id);
+      card.card.setAlpha(done ? 1 : 0.6);
+      card.name.setColor(done ? '#f0c674' : '#7c8ba1');
+      card.description.setColor(done ? '#c3cedd' : '#64748b');
+      card.diamond.setFillStyle(
+        done ? UI_COLORS.brassBright : UI_COLORS.panelLine,
+        done ? 1 : 0.6
+      );
+      card.status.setText(done ? 'ОТКРЫТО' : 'ЗАКРЫТО');
+      card.status.setColor(done ? '#f0c674' : '#64748b');
+    }
+  };
+
+  // ----------------------------------------------------------------- БЕСТИАРИЙ
+  const bestiaryContent = scene.add.container(0, 0);
+  const bestiaryHeader = scene.add.text(206, 182, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 1,
+  });
+  const bestiaryHint = scene.add.text(1074, 182, 'УБЕЙТЕ ВРАГА, ЧТОБЫ ЗАПИСАТЬ ЕГО', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    color: '#7c8ba1',
+  }).setOrigin(1, 0);
+
+  const bestiaryCards = BESTIARY_ENTRIES.map((entry, index) => {
+    const column = index % 4;
+    const row = Math.floor(index / 4);
+    const card = scene.add.container(317 + column * 215, 198 + row * 100);
+    const cardPanel = createPanel(scene, -102, 0, 204, 92, 0x4b5d77, { alpha: 0.95 });
+    const artHolder = scene.add.container(0, 30);
+
+    const isBoss = entry.kind === 'boss';
+    const radius = isBoss
+      ? BOSS_CONFIG[entry.key as BossTypeKey].radius
+      : GAME_CONFIG.ENEMIES[entry.key as EnemyTypeKey].radius;
+    const visual = isBoss
+      ? createBossVisual(
+          scene,
+          entry.key as BossTypeKey,
+          BOSS_CONFIG[entry.key as BossTypeKey],
+          0,
+          0
+        )
+      : createEnemyVisual(
+          scene,
+          entry.key as EnemyTypeKey,
+          GAME_CONFIG.ENEMIES[entry.key as EnemyTypeKey],
+          0,
+          0
+        );
+    visual.container.setScale(Math.min(1.6, 24 / radius));
+    freezeVisual(visual.container);
+    // Полоски здоровья живут отдельно от контейнера и в книге не нужны.
+    visual.hpBar?.destroy();
+    visual.hpBarBack?.destroy();
+    artHolder.add(visual.container);
+
+    const name = scene.add.text(0, 58, entry.name, {
+      fontFamily: UI_FONT.body,
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#7c8ba1',
+      letterSpacing: 0.5,
+    }).setOrigin(0.5);
+    const role = scene.add.text(0, 73, entry.role, {
+      fontFamily: UI_FONT.body,
+      fontSize: '8px',
+      color: '#64748b',
+    }).setOrigin(0.5);
+    const count = scene.add.text(94, 8, '', {
+      fontFamily: UI_FONT.mono,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+    }).setOrigin(1, 0);
+
+    card.add([cardPanel, artHolder, name, role, count]);
+    bestiaryContent.add(card);
+    return { entry, card, cardPanel, artHolder, name, role, count };
+  });
+
+  const refreshBestiary = (): void => {
+    const profile = controller.getProfile();
+    const discovered = countDiscovered(profile.bestiary);
+    bestiaryHeader.setText(`ОТКРЫТО ${discovered} / ${BESTIARY_ENTRIES.length}`);
+
+    for (const card of bestiaryCards) {
+      const kills = profile.bestiary[card.entry.key] ?? 0;
+      const seen = kills > 0;
+      card.artHolder.setAlpha(seen ? 1 : 0.14);
+      card.name.setText(seen ? card.entry.name : '???');
+      card.name.setColor(seen ? '#e8eef7' : '#64748b');
+      card.role.setText(seen ? card.entry.role : 'НЕ ВСТРЕЧЕН');
+      card.role.setColor(seen ? '#7c8ba1' : '#475569');
+      card.count.setText(seen ? `×${kills}` : '');
+      card.cardPanel.setAlpha(seen ? 1 : 0.7);
+    }
+  };
+
+  // ---------------------------------------------------------------- МАСТЕРСТВО
+  const masteryContent = scene.add.container(0, 0);
+  const masteryHeader = scene.add.text(
+    206,
+    182,
+    'ПОБЕДЫ В ЛОКАЦИИ ОТКРЫВАЮТ ЕЁ ПЕРКИ',
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      letterSpacing: 1,
+    }
+  );
+
+  const masteryRows = LEVELS.map((level, index) => {
+    const card = scene.add.container(0, 200 + index * 126);
+    const cardPanel = createPanel(scene, 210, 0, 860, 114, 0x4b5d77, { alpha: 0.95 });
+    const name = scene.add.text(
+      230,
+      14,
+      `ЛОКАЦИЯ ${FLOOR_ROMAN[index] ?? index + 1} · ${level.name.toUpperCase()}`,
+      {
+        fontFamily: UI_FONT.display,
+        fontSize: '14px',
+        fontStyle: 'bold',
+        color: '#f0c674',
+        letterSpacing: 1,
+      }
+    );
+    const wins = scene.add.text(1050, 18, '', {
+      fontFamily: UI_FONT.mono,
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#c3cedd',
+    }).setOrigin(1, 0);
+
+    // Панель кладём первой, иначе она закроет чипы ступеней.
+    card.add([cardPanel, name, wins]);
+
+    const steps = MASTERY_STEPS.map((step, stepIndex) => {
+      const chip = scene.add.container(230 + stepIndex * 284, 74);
+      const bg = scene.add
+        .rectangle(0, 0, 272, 60, 0x0f1626, 0.92)
+        .setStrokeStyle(1, UI_COLORS.panelLine, 0.8);
+      const stepTitle = scene.add.text(10, 8, step.title, {
+        fontFamily: UI_FONT.body,
+        fontSize: '9px',
+        fontStyle: 'bold',
+        color: '#7c8ba1',
+        letterSpacing: 1,
+      });
+      const effect = scene.add.text(10, 24, step.effect, {
+        fontFamily: UI_FONT.body,
+        fontSize: '8px',
+        color: '#64748b',
+        wordWrap: { width: 198 },
+      });
+      const progress = scene.add.text(126, 8, '', {
+        fontFamily: UI_FONT.mono,
+        fontSize: '9px',
+        fontStyle: 'bold',
+        color: '#64748b',
+      }).setOrigin(1, 0);
+
+      chip.add([bg, stepTitle, effect, progress]);
+      card.add(chip);
+      return { step, bg, stepTitle, effect, progress };
+    });
+
+    masteryContent.add(card);
+    return { level, card, name, wins, steps };
+  });
+
+  const refreshMastery = (): void => {
+    const profile = controller.getProfile();
+    masteryRows.forEach((row, index) => {
+      const victories = profile.levelStats[index]?.victories ?? 0;
+      const mastery = getMastery(victories);
+      row.wins.setText(`ПОБЕД: ${victories} · СТУПЕНЬ ${mastery.tier}/3`);
+      row.wins.setColor(mastery.tier > 0 ? '#f0c674' : '#7c8ba1');
+
+      for (const step of row.steps) {
+        const done = victories >= step.step.threshold;
+        step.stepTitle.setColor(done ? '#f0c674' : '#7c8ba1');
+        step.effect.setColor(done ? '#c3cedd' : '#64748b');
+        step.bg.setFillStyle(done ? 0x1a2438 : 0x0f1626, done ? 0.95 : 0.92);
+        step.bg.setStrokeStyle(1, done ? UI_COLORS.brass : UI_COLORS.panelLine, done ? 0.9 : 0.6);
+        step.progress.setText(
+          done ? 'ОТКРЫТО' : `${Math.min(victories, step.step.threshold)} / ${step.step.threshold}`
+        );
+        step.progress.setColor(done ? '#f0c674' : '#64748b');
+      }
+    });
+  };
+
+  // -------------------------------------------------------------------- ОБЛИК
+  const lookContent = scene.add.container(0, 0);
+  const previewPanel = createPanel(scene, 210, 198, 360, 390, UI_COLORS.brass, { glow: true });
+  const previewTitle = scene.add.text(390, 218, 'ПРЕДПРОСМОТР', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7c8ba1',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+
+  const previewHolder = scene.add.container(390, 382);
+  const previewVisual = createPlayer(scene, 0, 0, getPalette(controller.getProfile().appearance), {
+    animate: false,
+  });
+  previewVisual.shadow.destroy();
+  previewVisual.container.setScale(3.2).setRotation(-0.18);
+  previewHolder.add(previewVisual.container);
+
+  const previewName = scene.add.text(390, 520, '', {
+    fontFamily: UI_FONT.display,
+    fontSize: '18px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 2,
+  }).setOrigin(0.5);
+  const previewHint = scene.add.text(390, 546, '', {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    color: '#7c8ba1',
+  }).setOrigin(0.5);
+
+  const paletteCards = PALETTES.map((palette, index) => {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    const card = scene.add.container(705 + column * 242, 198 + row * 126);
+    const cardPanel = createPanel(scene, -115, 0, 230, 114, 0x4b5d77, { alpha: 0.95 });
+    const hit = scene.add
+      .rectangle(0, 57, 222, 106, 0x000000, 0)
+      .setInteractive({ useHandCursor: true });
+    const name = scene.add.text(-100, 12, palette.name, {
+      fontFamily: UI_FONT.display,
+      fontSize: '13px',
+      fontStyle: 'bold',
+      color: '#c3cedd',
+      letterSpacing: 1,
+    });
+    const swatches = [palette.cloak, palette.armor, palette.metal, palette.glow].map(
+      (color, swatchIndex) =>
+        scene.add
+          .circle(-88 + swatchIndex * 26, 48, 9, color)
+          .setStrokeStyle(1.5, 0x0f172a)
+    );
+    const requirement = scene.add.text(-100, 70, '', {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: '#64748b',
+    });
+    const state = scene.add.text(100, 12, '', {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+    }).setOrigin(1, 0);
+
+    hit.on('pointerdown', () => {
+      const profile = controller.getProfile();
+      if (!isPaletteUnlocked(palette, countUnlocked(profile))) return;
+      controller.selectAppearance(palette.id);
+      refreshLook();
+    });
+
+    card.add([cardPanel, hit, name, ...swatches, requirement, state]);
+    lookContent.add(card);
+    return { palette, card, cardPanel, hit, name, requirement, state };
+  });
+
+  // Скрытые вкладки не должны перехватывать клики: Phaser проверяет
+  // видимость только у самого объекта, а не у родительского контейнера.
+  const setPaletteInputEnabled = (enabled: boolean): void => {
+    for (const card of paletteCards) {
+      if (enabled) card.hit.setInteractive({ useHandCursor: true });
+      else card.hit.disableInteractive();
+    }
+  };
+
+  const refreshLook = (): void => {
+    const profile = controller.getProfile();
+    const count = countUnlocked(profile);
+    const selected = getPalette(profile.appearance);
+    applyPlayerPalette(previewVisual, selected);
+    previewName.setText(selected.name);
+
+    const next = getNextPalette(count);
+    previewHint.setText(
+      next
+        ? `ОТКРЫТО ${count} ДОСТИЖЕНИЙ · ДО «${next.palette.name}»: ${next.remaining}`
+        : `ОТКРЫТО ${count} ДОСТИЖЕНИЙ · ВСЕ ОБЛИКИ`
+    );
+
+    for (const card of paletteCards) {
+      const unlocked = isPaletteUnlocked(card.palette, count);
+      const isSelected = card.palette.id === profile.appearance;
+      card.card.setAlpha(unlocked ? 1 : 0.5);
+      card.name.setColor(isSelected ? '#f0c674' : unlocked ? '#e8eef7' : '#7c8ba1');
+      card.state.setText(isSelected ? '●' : '');
+      if (unlocked) {
+        card.requirement.setText(isSelected ? 'ВЫБРАН' : 'ОТКРЫТ');
+        card.requirement.setColor(isSelected ? '#f0c674' : '#94a3b8');
+      } else {
+        card.requirement.setText(`${card.palette.threshold} ДОСТИЖЕНИЙ`);
+        card.requirement.setColor('#64748b');
+      }
+    }
+  };
+
+  // ------------------------------------------------------------ ПЕРЕКЛЮЧЕНИЕ
+  const contentByTab: Record<BookTab, Phaser.GameObjects.Container> = {
+    ACHIEVEMENTS: achievementsContent,
+    BESTIARY: bestiaryContent,
+    MASTERY: masteryContent,
+    LOOK: lookContent,
+  };
+
+  function setTab(tab: BookTab): void {
+    for (const button of tabButtons) {
+      const active = button.id === tab;
+      button.bg.setFillStyle(active ? UI_COLORS.ember : 0x0f1626, active ? 0.96 : 0.92);
+      button.bg.setStrokeStyle(
+        2,
+        active ? UI_COLORS.emberBright : UI_COLORS.brass,
+        active ? 1 : 0.8
+      );
+      button.text.setColor(active ? '#1a1205' : '#f0c674');
+    }
+    for (const [id, content] of Object.entries(contentByTab) as [
+      BookTab,
+      Phaser.GameObjects.Container,
+    ][]) {
+      content.setVisible(id === tab);
+    }
+
+    // Скрытые карточки обликов не должны ловить клики за пределами книги.
+    setPaletteInputEnabled(tab === 'LOOK');
+  }
+
+  achievementsContent.add([achievementsHeader, achievementsHint]);
+  bestiaryContent.add([bestiaryHeader, bestiaryHint]);
+  masteryContent.add(masteryHeader);
+  lookContent.add([previewPanel, previewTitle, previewHolder, previewName, previewHint]);
+
+  // До первого открытия книга скрыта, но её карточки обликов интерактивны.
+  // Сразу выбираем вкладку, чтобы они не перехватывали клики по лагерю.
+  setTab('ACHIEVEMENTS');
+
+  const closeButton = createButton(scene, 640, 618, 220, 42, 'ЗАКРЫТЬ', {
+    variant: 'secondary',
+    onClick: () => close(),
+    fontSize: 13,
+  });
+
+  modal.add([
+    panel,
+    title,
+    subtitle,
+    divider,
+    ...tabButtons.map((button) => button.container),
+    achievementsContent,
+    bestiaryContent,
+    masteryContent,
+    lookContent,
+    closeButton.container,
+  ]);
+  screen.add(modal);
+
+  const open = (): void => {
+    refreshAchievements();
+    refreshBestiary();
+    refreshMastery();
+    refreshLook();
+    setTab('ACHIEVEMENTS');
+    // Книга создаётся раньше кнопок лагеря: поднимаем её поверх всей сцены.
+    screen.bringToTop(modal);
+    modal.setVisible(true);
+    modal.setAlpha(0);
+    scene.tweens.add({
+      targets: modal,
+      alpha: 1,
+      duration: 220,
+      ease: 'Quad.easeOut',
+    });
+  };
+
+  function close(): void {
+    // Карточки обликов лежат глубже контейнера книги и остаются
+    // интерактивными, даже когда книга скрыта.
+    setPaletteInputEnabled(false);
+    scene.tweens.add({
+      targets: modal,
+      alpha: 0,
+      duration: 140,
+      onComplete: () => modal.setVisible(false),
+    });
+  }
+
+  return { open };
+}
+
+// ============================================================================
 // ХАБ / СТАРТОВЫЙ ЭКРАН
 // ============================================================================
 
@@ -1274,20 +1839,30 @@ export function drawStartScreen(
     fontSize: 13,
   });
 
-  const helpButton = createButton(scene, menuX - 84, 462, 152, 50, 'ПАМЯТКА', {
+  const book = createGuardBookModal(scene, screen, profileController);
+
+  const helpButton = createButton(scene, menuX - 110, 462, 100, 50, 'ПАМЯТКА', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => help.open(),
-    fontSize: 12,
+    fontSize: 10,
   });
 
-  const trialsButton = createButton(scene, menuX + 84, 462, 152, 50, 'ИСПЫТАНИЯ', {
+  const bookButton = createButton(scene, menuX, 462, 100, 50, 'КНИГА', {
+    variant: 'ghost',
+    accent: UI_COLORS.brass,
+    accentHex: '#f0c674',
+    onClick: () => book.open(),
+    fontSize: 10,
+  });
+
+  const trialsButton = createButton(scene, menuX + 110, 462, 100, 50, 'ИСПЫТАНИЯ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
     onClick: () => trials.open(),
-    fontSize: 12,
+    fontSize: 9,
   });
 
   /** Кнопка показывает, сколько испытаний включено прямо сейчас. */
@@ -1452,6 +2027,7 @@ export function drawStartScreen(
     upgradesButton.container,
     settingsButton.container,
     helpButton.container,
+    bookButton.container,
     trialsButton.container,
     statsPanel,
     statsHeader,
@@ -1568,7 +2144,7 @@ function drawResultScreen(
   const screen = createScreenBase(scene, overlay, options.accent);
   const card = scene.add.container(scene.scale.width / 2, scene.scale.height / 2);
 
-  const panel = createPanel(scene, -420, -310, 840, 620, options.accent, { glow: true });
+  const panel = createPanel(scene, -420, -325, 840, 650, options.accent, { glow: true });
   card.add(panel);
 
   const badge = scene.add.text(0, -270, options.badge, {
@@ -1700,7 +2276,26 @@ function drawResultScreen(
     letterSpacing: 2,
   }).setOrigin(0.5).setVisible(showTrialLine);
 
-  const primaryButton = createButton(scene, 0, 226, 340, 58, options.primaryLabel, {
+  // Новые достижения показываются одной строкой и слегка раздвигают кнопки.
+  const newAchievements = stats.newAchievements
+    .map((id) => getAchievement(id)?.name ?? id)
+    .filter((name) => name.length > 0);
+  const achievementLine =
+    newAchievements.length === 1
+      ? `НОВОЕ ДОСТИЖЕНИЕ · ${newAchievements[0]}`
+      : `НОВЫХ ДОСТИЖЕНИЙ: ${newAchievements.length}`;
+  const achievementText = scene.add.text(0, 204, achievementLine, {
+    fontFamily: UI_FONT.body,
+    fontSize: '10px',
+    fontStyle: 'bold',
+    color: '#f0c674',
+    letterSpacing: 1,
+  }).setOrigin(0.5).setVisible(newAchievements.length > 0);
+
+  const primaryY = newAchievements.length > 0 ? 240 : 226;
+  const secondaryY = newAchievements.length > 0 ? 296 : 284;
+
+  const primaryButton = createButton(scene, 0, primaryY, 340, 58, options.primaryLabel, {
     variant: 'primary',
     accent: options.accent,
     accentHex: options.primaryTextColor,
@@ -1708,7 +2303,7 @@ function drawResultScreen(
     fontSize: 17,
   });
 
-  const secondaryButton = createButton(scene, 0, 284, 300, 46, 'В ЛАГЕРЬ', {
+  const secondaryButton = createButton(scene, 0, secondaryY, 300, 46, 'В ЛАГЕРЬ', {
     variant: 'secondary',
     onClick: options.onBackToMenu,
     fontSize: 14,
@@ -1723,6 +2318,7 @@ function drawResultScreen(
     footnote,
     echoText,
     trialText,
+    achievementText,
     primaryButton.container,
     secondaryButton.container,
   ]);

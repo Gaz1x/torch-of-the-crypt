@@ -17,6 +17,9 @@ import {
 import { getMastery } from './mastery';
 import { isTrialKey, TRIAL_ORDER, type TrialKey } from './trials';
 import { getLevelEchoMultiplier, LEVELS } from './waves';
+import { ACHIEVEMENT_IDS, isAchievementId } from './achievements';
+import { BESTIARY_KEYS } from './bestiary';
+import { DEFAULT_PALETTE_ID, PALETTE_IDS } from './cosmetics';
 
 export type RankLetter = 'B' | 'A' | 'S' | 'SS' | 'SS+' | 'SSS' | 'SSS+';
 
@@ -77,6 +80,12 @@ export interface Profile {
   unlockedLevels: number;
   /** Рекорды по каждой локации, индекс совпадает с LEVELS. */
   levelStats: LevelStats[];
+  /** Открытые достижения: награда только косметическая. */
+  achievements: string[];
+  /** Сколько раз был убит каждый враг и босс (ключи бестиария). */
+  bestiary: Record<string, number>;
+  /** Выбранный облик стража (см. cosmetics.ts). */
+  appearance: string;
 }
 
 export const DEFAULT_LEVEL_STATS: LevelStats = {
@@ -100,6 +109,9 @@ export const DEFAULT_PROFILE: Profile = {
   activeTrials: [],
   unlockedLevels: 1,
   levelStats: LEVELS.map(() => ({ ...DEFAULT_LEVEL_STATS })),
+  achievements: [],
+  bestiary: {},
+  appearance: DEFAULT_PALETTE_ID,
 };
 
 /**
@@ -158,6 +170,8 @@ export interface RunSummary {
   rank: RankLetter;
   /** Индекс локации, в которой прошёл спуск. */
   levelIndex: number;
+  /** Сколько каких врагов убито за спуск: пополняет бестиарий. */
+  killsByType?: Record<string, number>;
 }
 
 export interface RunReward {
@@ -195,6 +209,12 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
     };
   });
 
+  // Бестиарий копится между спусками: убийства этого забега прибавляются.
+  const bestiary = { ...profile.bestiary };
+  for (const [key, count] of Object.entries(run.killsByType ?? {})) {
+    if (count > 0) bestiary[key] = (bestiary[key] ?? 0) + count;
+  }
+
   const next: Profile = {
     ...profile,
     echo: profile.echo + echoGained,
@@ -212,6 +232,7 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
         : profile.unlockedLevels
     ),
     levelStats: nextLevelStats,
+    bestiary,
   };
 
   return { profile: next, echoGained, echoMultiplier, newBestScore, newBestTime, newBestRank };
@@ -311,12 +332,40 @@ function sanitizeLevelStats(raw: unknown): LevelStats[] {
   });
 }
 
+function sanitizeAchievements(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const unlocked = new Set<string>();
+  for (const value of raw) {
+    if (isAchievementId(value)) unlocked.add(value);
+  }
+  // Порядок фиксирован определениями, а не сохранением.
+  return ACHIEVEMENT_IDS.filter((id) => unlocked.has(id));
+}
+
+function sanitizeBestiary(raw: unknown): Record<string, number> {
+  const data = typeof raw === 'object' && raw !== null
+    ? (raw as Record<string, unknown>)
+    : {};
+  const result: Record<string, number> = {};
+  for (const key of BESTIARY_KEYS) {
+    const count = toSafeInt(data[key]);
+    if (count > 0) result[key] = count;
+  }
+  return result;
+}
+
+function sanitizeAppearance(raw: unknown): string {
+  return typeof raw === 'string' && PALETTE_IDS.includes(raw) ? raw : DEFAULT_PALETTE_ID;
+}
+
 function emptyProfile(): Profile {
   return {
     ...DEFAULT_PROFILE,
     upgrades: { ...DEFAULT_UPGRADES },
     activeTrials: [],
     levelStats: DEFAULT_PROFILE.levelStats.map((stats) => ({ ...stats })),
+    achievements: [],
+    bestiary: {},
   };
 }
 
@@ -343,6 +392,9 @@ function sanitizeProfile(raw: unknown): Profile {
     activeTrials: sanitizeTrials(data.activeTrials),
     unlockedLevels,
     levelStats: sanitizeLevelStats(data.levelStats),
+    achievements: sanitizeAchievements(data.achievements),
+    bestiary: sanitizeBestiary(data.bestiary),
+    appearance: sanitizeAppearance(data.appearance),
   };
 }
 

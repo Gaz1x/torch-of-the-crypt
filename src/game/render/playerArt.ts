@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { DEFAULT_PALETTE, type KnightPalette } from '../core/cosmetics';
 
 // ============================================================================
 // ОТРИСОВКА РЫЦАРЯ
@@ -29,8 +30,6 @@ const FLAME_CORE_RADIUS = 4;
 const CLOAK_BACK = [[0, -9], [-13, -13], [-13, 13], [0, 9]];
 const CLOAK_FRONT = [[0, -7], [-10, -10], [-10, 10], [0, 7]];
 
-const BRASS = 0xb08a4a;
-
 export interface PlayerVisual {
   container: Phaser.GameObjects.Container;
   /** Внутренняя фигура: её можно качать и наклонять, не трогая позицию. */
@@ -39,9 +38,60 @@ export interface PlayerVisual {
   shadow: Phaser.GameObjects.Ellipse;
   torchFlameOuter: Phaser.GameObjects.Arc;
   torchFlameCore: Phaser.GameObjects.Arc;
+  /** Части, которые перекрашивает выбранный облик. */
+  parts: {
+    cloakBack: Phaser.GameObjects.Polygon;
+    cloakFront: Phaser.GameObjects.Polygon;
+    folds: Phaser.GameObjects.Graphics;
+    pauldronLeft: Phaser.GameObjects.Ellipse;
+    pauldronRight: Phaser.GameObjects.Ellipse;
+    leftArm: Phaser.GameObjects.Ellipse;
+    rightArm: Phaser.GameObjects.Ellipse;
+    staffRing: Phaser.GameObjects.Rectangle;
+    torchBand: Phaser.GameObjects.Rectangle;
+    helmet: Phaser.GameObjects.Arc;
+    helmetRim: Phaser.GameObjects.Arc;
+    staffGemGlow: Phaser.GameObjects.Arc;
+    staffGem: Phaser.GameObjects.Arc;
+    visor: Phaser.GameObjects.Rectangle;
+  };
 }
 
-export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerVisual {
+/** Складки плаща перерисовываются при смене облика. */
+function drawCloakFolds(graphics: Phaser.GameObjects.Graphics, color: number): void {
+  graphics.clear();
+  graphics.lineStyle(1, color, 0.9);
+  graphics.lineBetween(-9, -7, -15, -3);
+  graphics.lineBetween(-9, 0, -16, 0);
+  graphics.lineBetween(-9, 7, -15, 3);
+}
+
+/** Перекрашивает уже созданного рыцаря под выбранный облик. */
+export function applyPlayerPalette(visual: PlayerVisual, palette: KnightPalette): void {
+  const { parts } = visual;
+  parts.cloakBack.setFillStyle(palette.cloakDark).setStrokeStyle(1, palette.cloakTrim);
+  parts.cloakFront.setFillStyle(palette.cloak).setStrokeStyle(1, palette.cloakTrim);
+  drawCloakFolds(parts.folds, palette.cloakTrim);
+  parts.leftArm.setFillStyle(palette.armor);
+  parts.rightArm.setFillStyle(palette.armor);
+  parts.pauldronLeft.setStrokeStyle(1.5, palette.metal);
+  parts.pauldronRight.setStrokeStyle(1.5, palette.metal);
+  parts.staffRing.setFillStyle(palette.metal);
+  parts.torchBand.setFillStyle(palette.metal);
+  parts.helmet.setFillStyle(palette.armor);
+  parts.helmetRim.setStrokeStyle(1, palette.metal, 0.55);
+  parts.staffGemGlow.setFillStyle(palette.glow, 0.35);
+  parts.staffGem.setFillStyle(palette.glow);
+  parts.visor.setFillStyle(palette.glow);
+}
+
+export function createPlayer(
+  scene: Phaser.Scene,
+  x: number,
+  y: number,
+  palette: KnightPalette = DEFAULT_PALETTE,
+  options: { animate?: boolean } = {}
+): PlayerVisual {
   const shadow = scene.add.ellipse(x + 2, y + 13, 30, 13, 0x03060b, 0.38).setDepth(11);
 
   const container = scene.add.container(x, y).setDepth(12);
@@ -51,45 +101,42 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
   // 1. Плащ: внешний слой темнее, внутренний — алый, плюс линии складок.
   // setOrigin(0): точки Polygon рисуются минус displayOrigin (origin * размер).
   const cloakBack = scene.add
-    .polygon(-10, 0, CLOAK_BACK, 0x5b1414)
+    .polygon(-10, 0, CLOAK_BACK, palette.cloakDark)
     .setOrigin(0)
-    .setStrokeStyle(1, 0x2a0808);
+    .setStrokeStyle(1, palette.cloakTrim);
   const cloakFront = scene.add
-    .polygon(-8, 0, CLOAK_FRONT, 0x991b1b)
+    .polygon(-8, 0, CLOAK_FRONT, palette.cloak)
     .setOrigin(0)
-    .setStrokeStyle(1, 0x450a0a);
+    .setStrokeStyle(1, palette.cloakTrim);
 
   const folds = scene.add.graphics();
-  folds.lineStyle(1, 0x450a0a, 0.9);
-  folds.lineBetween(-9, -7, -15, -3);
-  folds.lineBetween(-9, 0, -16, 0);
-  folds.lineBetween(-9, 7, -15, 3);
+  drawCloakFolds(folds, palette.cloakTrim);
 
   // 2. Руки — зеркальные копии друг друга.
-  const leftArm = scene.add.ellipse(0, -ARM_OFFSET_Y, ARM_WIDTH, ARM_HEIGHT, 0x64748b)
+  const leftArm = scene.add.ellipse(0, -ARM_OFFSET_Y, ARM_WIDTH, ARM_HEIGHT, palette.armor)
     .setStrokeStyle(1.5, 0x0f172a);
-  const rightArm = scene.add.ellipse(0, ARM_OFFSET_Y, ARM_WIDTH, ARM_HEIGHT, 0x64748b)
+  const rightArm = scene.add.ellipse(0, ARM_OFFSET_Y, ARM_WIDTH, ARM_HEIGHT, palette.armor)
     .setStrokeStyle(1.5, 0x0f172a);
 
   // Наплечники: латунная окантовка и светлая грань.
   const pauldronLeft = scene.add.ellipse(0, -ARM_OFFSET_Y - 2, 13, 8, 0x475569)
-    .setStrokeStyle(1.5, BRASS);
+    .setStrokeStyle(1.5, palette.metal);
   const pauldronRight = scene.add.ellipse(0, ARM_OFFSET_Y + 2, 13, 8, 0x475569)
-    .setStrokeStyle(1.5, BRASS);
+    .setStrokeStyle(1.5, palette.metal);
 
   // 3. Оружие лежит в руках: древко начинается у края руки, дальше от корпуса.
   const staffShaft = scene.add.rectangle(STAFF_X, -ARM_OFFSET_Y, STAFF_LENGTH, 3, 0x475569);
-  const staffRing = scene.add.rectangle(STAFF_X + 6, -ARM_OFFSET_Y, 2, 5, BRASS);
+  const staffRing = scene.add.rectangle(STAFF_X + 6, -ARM_OFFSET_Y, 2, 5, palette.metal);
   const staffGemGlow = scene.add
-    .circle(STAFF_GEM_X, -ARM_OFFSET_Y, 10, 0x38bdf8, 0.35)
+    .circle(STAFF_GEM_X, -ARM_OFFSET_Y, 10, palette.glow, 0.35)
     .setBlendMode(Phaser.BlendModes.ADD);
-  const staffGem = scene.add.circle(STAFF_GEM_X, -ARM_OFFSET_Y, STAFF_GEM_RADIUS, 0x38bdf8)
+  const staffGem = scene.add.circle(STAFF_GEM_X, -ARM_OFFSET_Y, STAFF_GEM_RADIUS, palette.glow)
     .setStrokeStyle(1, 0xe0f2fe);
   const staffGemCore = scene.add.circle(STAFF_GEM_X + 1, -ARM_OFFSET_Y - 1, 1.6, 0xe0f2fe);
 
   const torchHandle = scene.add.rectangle(TORCH_HANDLE_X, ARM_OFFSET_Y, TORCH_HANDLE_LENGTH, 4, 0x78350f)
     .setStrokeStyle(1, 0x451a03);
-  const torchBand = scene.add.rectangle(TORCH_HANDLE_X + 5, ARM_OFFSET_Y, 2, 5, BRASS);
+  const torchBand = scene.add.rectangle(TORCH_HANDLE_X + 5, ARM_OFFSET_Y, 2, 5, palette.metal);
   const torchGlow = scene.add
     .circle(FLAME_X, ARM_OFFSET_Y, FLAME_OUTER_RADIUS + 7, 0xf97316, 0.3)
     .setBlendMode(Phaser.BlendModes.ADD);
@@ -98,11 +145,11 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
   const torchFlameCore = scene.add.circle(FLAME_X, ARM_OFFSET_Y, FLAME_CORE_RADIUS, 0xfef08a, 1);
 
   // 4. Центральный шлем: блик, латунный обод и забрало.
-  const helmet = scene.add.circle(0, 0, BODY_RADIUS, 0x94a3b8).setStrokeStyle(2, 0x0f172a);
-  const helmetRim = scene.add.circle(0, 0, BODY_RADIUS).setStrokeStyle(1, BRASS, 0.55);
+  const helmet = scene.add.circle(0, 0, BODY_RADIUS, palette.armor).setStrokeStyle(2, 0x0f172a);
+  const helmetRim = scene.add.circle(0, 0, BODY_RADIUS).setStrokeStyle(1, palette.metal, 0.55);
   const helmetHighlight = scene.add.circle(-3.5, -3.5, 3.6, 0xcbd5e1, 0.5);
   const visorH = scene.add.rectangle(5, 0, 3, 8, 0x0f172a);
-  const visorCyanGlow = scene.add.rectangle(6, 0, 1.5, 5, 0x38bdf8);
+  const visorCyanGlow = scene.add.rectangle(6, 0, 1.5, 5, palette.glow);
 
   figure.add([
     cloakBack,
@@ -132,25 +179,50 @@ export function createPlayer(scene: Phaser.Scene, x: number, y: number): PlayerV
 
   container.add(figure);
 
-  // Камень посоха дышит, пламя факела мерцает.
-  scene.tweens.add({
-    targets: [staffGemGlow, staffGem],
-    scale: 1.18,
-    alpha: 0.75,
-    duration: 1100,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.easeInOut',
-  });
-  scene.tweens.add({
-    targets: [torchGlow, torchFlameOuter, torchFlameMid, torchFlameCore],
-    scale: 1.14,
-    alpha: 0.82,
-    duration: 520,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.easeInOut',
-  });
+  // Камень посоха дышит, пламя факела мерцает. В превью «Книги стража»
+  // анимация не нужна: там фигура стоит неподвижно.
+  if (options.animate !== false) {
+    scene.tweens.add({
+      targets: [staffGemGlow, staffGem],
+      scale: 1.18,
+      alpha: 0.75,
+      duration: 1100,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    scene.tweens.add({
+      targets: [torchGlow, torchFlameOuter, torchFlameMid, torchFlameCore],
+      scale: 1.14,
+      alpha: 0.82,
+      duration: 520,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+  }
 
-  return { container, figure, shadow, torchFlameOuter, torchFlameCore };
+  return {
+    container,
+    figure,
+    shadow,
+    torchFlameOuter,
+    torchFlameCore,
+    parts: {
+      cloakBack,
+      cloakFront,
+      folds,
+      pauldronLeft,
+      pauldronRight,
+      leftArm,
+      rightArm,
+      staffRing,
+      torchBand,
+      helmet,
+      helmetRim,
+      staffGemGlow,
+      staffGem,
+      visor: visorCyanGlow,
+    },
+  };
 }

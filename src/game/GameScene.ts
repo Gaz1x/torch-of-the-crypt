@@ -17,6 +17,8 @@ import { getMastery } from './core/mastery';
 import { getTrialEffects, getTrialMultiplier, type TrialEffects, type TrialKey } from './core/trials';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
 import { startAttempt, track } from './core/analytics';
+import { evaluateAchievements } from './core/achievements';
+import { getPalette } from './core/cosmetics';
 import {
   getUpgradeBonuses,
   type UpgradeKey,
@@ -28,7 +30,7 @@ import type {
   ProjectileEntity,
 } from './core/entities';
 import { drawCryptEnvironment, type WorldCrack } from './render/world';
-import { createPlayer, type PlayerVisual } from './render/playerArt';
+import { createPlayer, applyPlayerPalette, type PlayerVisual } from './render/playerArt';
 import { createEnemyVisual } from './render/enemyArt';
 import { createBossVisual } from './render/bossArt';
 import {
@@ -195,6 +197,8 @@ export class GameScene extends Phaser.Scene {
   private shotsHit = 0;
   private manaCollected = 0;
   private bossesKilled = 0;
+  /** Убийства этого спуска по типам: после финиша уходят в бестиарий. */
+  private runKills: Record<string, number> = {};
   /** Защита от повторного запуска, пока меню плавно гаснет. */
   private startingRun = false;
 
@@ -245,6 +249,16 @@ export class GameScene extends Phaser.Scene {
     // В лагере по умолчанию выбрана последняя открытая локация.
     this.selectedLevel = this.profile.unlockedLevels - 1;
 
+    // Старые сохранения могли наиграть условия достижений до их появления.
+    const legacyAchievements = evaluateAchievements(this.profile);
+    if (legacyAchievements.length > 0) {
+      this.profile = {
+        ...this.profile,
+        achievements: [...this.profile.achievements, ...legacyAchievements],
+      };
+      saveProfile(this.profile);
+    }
+
     const layout = drawCryptEnvironment(this);
     this.cracks = layout.cracks;
     this.torchLights = layout.torches;
@@ -259,7 +273,12 @@ export class GameScene extends Phaser.Scene {
       .setAlpha(GAME_CONFIG.LIGHT.AMBIENT_ALPHA)
       .setDisplaySize(this.currentLightRadius * 2.2, this.currentLightRadius * 2.2);
 
-    this.playerVisual = createPlayer(this, this.playerX, this.playerY);
+    this.playerVisual = createPlayer(
+      this,
+      this.playerX,
+      this.playerY,
+      getPalette(this.profile.appearance)
+    );
     this.player = this.playerVisual.container;
     this.cooldownArc = this.add.graphics().setDepth(13);
 
@@ -399,6 +418,11 @@ export class GameScene extends Phaser.Scene {
       setTrials: (trials: TrialKey[]) => {
         this.profile = { ...this.profile, activeTrials: [...trials] };
         saveProfile(this.profile);
+      },
+      selectAppearance: (id: string) => {
+        this.profile = { ...this.profile, appearance: id };
+        saveProfile(this.profile);
+        applyPlayerPalette(this.playerVisual, getPalette(id));
       },
     };
   }
@@ -1767,6 +1791,7 @@ export class GameScene extends Phaser.Scene {
       this.spawnManaOrb(e.x, e.y, e.config.manaDrop);
       this.score += e.config.scoreValue;
       this.killsCount++;
+      this.runKills[e.type] = (this.runKills[e.type] ?? 0) + 1;
       if (e.isBoss) {
         this.bossesKilled++;
       }
@@ -2031,6 +2056,8 @@ export class GameScene extends Phaser.Scene {
     this.survivalTime = 0;
     this.fireCooldown = 0;
     this.bossesKilled = 0;
+    this.runKills = {};
+    applyPlayerPalette(this.playerVisual, getPalette(this.profile.appearance));
 
     this.waveIndex = 0;
     this.waveSpawned = 0;
@@ -2085,6 +2112,7 @@ export class GameScene extends Phaser.Scene {
       echoTotal: this.profile.echo,
       victory,
       newlyUnlockedLevel: null,
+      newAchievements: [],
     };
   }
 
@@ -2108,9 +2136,21 @@ export class GameScene extends Phaser.Scene {
       bossesKilled: stats.bossesKilled,
       rank: calculateRank(stats).letter,
       levelIndex: this.levelIndex,
+      killsByType: this.runKills,
     });
 
     this.profile = reward.profile;
+
+    // Достижения проверяются после записи забега: бестиарий уже пополнен.
+    const newAchievements = evaluateAchievements(this.profile);
+    if (newAchievements.length > 0) {
+      this.profile = {
+        ...this.profile,
+        achievements: [...this.profile.achievements, ...newAchievements],
+      };
+      stats.newAchievements = newAchievements;
+    }
+
     saveProfile(this.profile);
     stats.echoGained = reward.echoGained;
     stats.echoMultiplier = reward.echoMultiplier;

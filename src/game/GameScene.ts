@@ -8,11 +8,13 @@ import { pickBoonChoices, BOON_ORDER, BOONS, type BoonKey } from './core/boons';
 import {
   applyRun,
   calculateRank,
+  consumeDailyAttempt,
   loadProfile,
   purchaseUpgrade,
   saveProfile,
   type Profile,
 } from './core/profile';
+import { getDailyKey, getDailyRun, type DailyRun } from './core/daily';
 import { getMastery } from './core/mastery';
 import { getTrialEffects, getTrialMultiplier, type TrialEffects, type TrialKey } from './core/trials';
 import { loadSettings, saveSettings, type GameSettings } from './core/settings';
@@ -128,6 +130,10 @@ export class GameScene extends Phaser.Scene {
   private trialEffects: TrialEffects = getTrialEffects(new Set());
   /** Защита от повторной записи одного и того же забега. */
   private runRecorded = false;
+  /** Ежедневный спуск, выбранный кнопкой в лагере (ещё не начат). */
+  private pendingDailyRun: DailyRun | null = null;
+  /** Ежедневный спуск текущей партии: его испытания заменяют профильные. */
+  private runDaily: DailyRun | null = null;
 
   // Система Света и Тьмы
   private darknessOverlay!: Phaser.GameObjects.RenderTexture;
@@ -382,11 +388,16 @@ export class GameScene extends Phaser.Scene {
     return controller;
   }
 
+  /** Испытания текущего забега: у «Спуска дня» свой набор. */
+  private getRunTrials(): TrialKey[] {
+    return this.runDaily?.trials ?? this.profile.activeTrials;
+  }
+
   /** Пересчитывает характеристики стража из улучшений, мастерства и испытаний. */
   private applyProfileBonuses(): void {
     const bonuses = getUpgradeBonuses(this.profile.upgrades);
     const mastery = getMastery(this.profile.levelStats[this.levelIndex]?.victories ?? 0);
-    const trials = getTrialEffects(new Set(this.profile.activeTrials));
+    const trials = getTrialEffects(new Set(this.getRunTrials()));
     this.trialEffects = trials;
 
     // «Стеклянный страж» отменяет любые бонусы здоровья.
@@ -419,6 +430,7 @@ export class GameScene extends Phaser.Scene {
         this.profile = { ...this.profile, activeTrials: [...trials] };
         saveProfile(this.profile);
       },
+      startDaily: () => this.startDailyRun(),
       selectAppearance: (id: string) => {
         this.profile = { ...this.profile, appearance: id };
         saveProfile(this.profile);
@@ -1947,6 +1959,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.gameState = 'START';
+    this.pendingDailyRun = null;
+    this.runDaily = null;
     clearAllNotices(this);
     this.hud.container.setVisible(false);
     hideBossBar(this.hud);
@@ -1990,6 +2004,18 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /** Запускает ежедневный спуск, если попытка на сегодня ещё не потрачена. */
+  private startDailyRun(): void {
+    // Клик по карточке во время запуска обычного спуска не должен
+    // подменить его ежедневным.
+    if (this.startingRun) return;
+    const today = getDailyKey();
+    if (this.profile.daily.key === today && this.profile.daily.used) return;
+    this.pendingDailyRun = getDailyRun(today, this.profile.unlockedLevels);
+    this.selectedLevel = this.pendingDailyRun.levelIndex;
+    this.startGame();
+  }
+
   /** Плавно гасит меню и только потом начинает новый спуск. */
   private startGame(): void {
     if (this.startingRun) return;
@@ -2013,6 +2039,9 @@ export class GameScene extends Phaser.Scene {
   /** Сбрасывает партию и запускает первую волну выбранной локации. */
   private beginRun(): void {
     this.levelIndex = this.selectedLevel;
+    // Ежедневный набор действует только на этот забег; обычный старт его снимает.
+    this.runDaily = this.pendingDailyRun;
+    this.pendingDailyRun = null;
     this.runAttempt = startAttempt();
     this.maxFloorReached = 1;
     track('run_start', {
@@ -2024,10 +2053,21 @@ export class GameScene extends Phaser.Scene {
     this.resetPlayerPosition();
     this.applyProfileBonuses();
 
-    if (this.profile.activeTrials.length > 0) {
+    if (this.runDaily) {
+      // Попытка тратится на старте: выход из боя не возвращает её.
+      this.profile = consumeDailyAttempt(this.profile);
+      saveProfile(this.profile);
+      track('daily_start', {
+        location: this.levelIndex + 1,
+        trials: this.runDaily.trials.join(','),
+      });
+    }
+
+    const trials = this.getRunTrials();
+    if (trials.length > 0) {
       track('trial_start', {
-        trials: this.profile.activeTrials.join(','),
-        multiplier: Number(getTrialMultiplier(this.profile.activeTrials).toFixed(2)),
+        trials: trials.join(','),
+        multiplier: Number(getTrialMultiplier(trials).toFixed(2)),
       });
     }
 
@@ -2108,9 +2148,10 @@ export class GameScene extends Phaser.Scene {
       echoGained: 0,
       echoMultiplier: 1,
       trialMultiplier,
-      trialsCount: this.profile.activeTrials.length,
+      trialsCount: this.getRunTrials().length,
       echoTotal: this.profile.echo,
       victory,
+      daily: this.runDaily !== null,
       newlyUnlockedLevel: null,
       newAchievements: [],
     };
@@ -2137,7 +2178,11 @@ export class GameScene extends Phaser.Scene {
       rank: calculateRank(stats).letter,
       levelIndex: this.levelIndex,
       killsByType: this.runKills,
+      daily: this.runDaily !== null,
+      echoBonus: this.runDaily?.echoBonus,
     });
+    // Дальше это обычный забег: «Ещё раз» не должен повторять ежедневный.
+    this.runDaily = null;
 
     this.profile = reward.profile;
 

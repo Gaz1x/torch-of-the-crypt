@@ -17,6 +17,7 @@ import {
 import { getMastery } from './mastery';
 import { isTrialKey, TRIAL_ORDER, type TrialKey } from './trials';
 import { getLevelEchoMultiplier, LEVELS } from './waves';
+import { getDailyKey } from './daily';
 import { ACHIEVEMENT_IDS, isAchievementId } from './achievements';
 import { BESTIARY_KEYS } from './bestiary';
 import { DEFAULT_PALETTE_ID, PALETTE_IDS } from './cosmetics';
@@ -86,6 +87,17 @@ export interface Profile {
   bestiary: Record<string, number>;
   /** Выбранный облик стража (см. cosmetics.ts). */
   appearance: string;
+  /** Ежедневный спуск: одна попытка на календарный день. */
+  daily: DailyProgress;
+}
+
+export interface DailyProgress {
+  /** Дата, к которой относится попытка (YYYY-MM-DD). */
+  key: string;
+  /** Попытка уже потрачена. */
+  used: boolean;
+  bestScore: number;
+  bestRank: RankLetter | null;
 }
 
 export const DEFAULT_LEVEL_STATS: LevelStats = {
@@ -112,6 +124,7 @@ export const DEFAULT_PROFILE: Profile = {
   achievements: [],
   bestiary: {},
   appearance: DEFAULT_PALETTE_ID,
+  daily: { key: '', used: false, bestScore: 0, bestRank: null },
 };
 
 /**
@@ -172,6 +185,10 @@ export interface RunSummary {
   levelIndex: number;
   /** Сколько каких врагов убито за спуск: пополняет бестиарий. */
   killsByType?: Record<string, number>;
+  /** Множитель Эха за особый режим (например, «Спуск дня»). */
+  echoBonus?: number;
+  /** Забег был ежедневным спуском: обновляет рекорд дня. */
+  daily?: boolean;
 }
 
 export interface RunReward {
@@ -192,7 +209,8 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
   const echoMultiplier =
     bonuses.echoMultiplier *
     getMastery(levelVictories).echoMultiplier *
-    getLevelEchoMultiplier(run.levelIndex);
+    getLevelEchoMultiplier(run.levelIndex) *
+    (run.echoBonus ?? 1);
   const echoGained = calculateEcho(run.score, run.bossesKilled, run.victory, echoMultiplier);
   const newBestScore = run.score > profile.bestScore;
   const newBestTime = run.survivalTime > profile.bestTime;
@@ -215,6 +233,25 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
     if (count > 0) bestiary[key] = (bestiary[key] ?? 0) + count;
   }
 
+  // Ежедневный рекорд обновляется только ежедневным спуском. Если профиль
+  // остался с прошлого дня, старый результат не переносится.
+  const dailyKey = getDailyKey();
+  const dailyBase =
+    profile.daily.key === dailyKey
+      ? profile.daily
+      : { key: dailyKey, used: true, bestScore: 0, bestRank: null };
+  const daily = run.daily
+    ? {
+        key: dailyKey,
+        used: true,
+        bestScore: Math.max(dailyBase.bestScore, run.score),
+        bestRank:
+          rankWeight(run.rank) > rankWeight(dailyBase.bestRank)
+            ? run.rank
+            : dailyBase.bestRank,
+      }
+    : profile.daily;
+
   const next: Profile = {
     ...profile,
     echo: profile.echo + echoGained,
@@ -233,9 +270,29 @@ export function applyRun(profile: Profile, run: RunSummary): RunReward {
     ),
     levelStats: nextLevelStats,
     bestiary,
+    daily,
   };
 
   return { profile: next, echoGained, echoMultiplier, newBestScore, newBestTime, newBestRank };
+}
+
+/**
+ * Помечает ежедневную попытку потраченной. Вызывается на старте спуска:
+ * выйти из боя и попробовать ещё раз в тот же день уже нельзя.
+ */
+export function consumeDailyAttempt(profile: Profile): Profile {
+  const key = getDailyKey();
+  if (profile.daily.key === key && profile.daily.used) return profile;
+  const sameDay = profile.daily.key === key;
+  return {
+    ...profile,
+    daily: {
+      key,
+      used: true,
+      bestScore: sameDay ? profile.daily.bestScore : 0,
+      bestRank: sameDay ? profile.daily.bestRank : null,
+    },
+  };
 }
 
 export interface UpgradePurchase {
@@ -358,6 +415,23 @@ function sanitizeAppearance(raw: unknown): string {
   return typeof raw === 'string' && PALETTE_IDS.includes(raw) ? raw : DEFAULT_PALETTE_ID;
 }
 
+/** Новый день — новая попытка: вчерашний рекорд сбрасывается. */
+function sanitizeDaily(raw: unknown): DailyProgress {
+  const data = typeof raw === 'object' && raw !== null
+    ? (raw as Record<string, unknown>)
+    : {};
+  const today = getDailyKey();
+  if (data.key !== today) {
+    return { key: today, used: false, bestScore: 0, bestRank: null };
+  }
+  return {
+    key: today,
+    used: data.used === true,
+    bestScore: toSafeInt(data.bestScore),
+    bestRank: sanitizeRank(data.bestRank),
+  };
+}
+
 function emptyProfile(): Profile {
   return {
     ...DEFAULT_PROFILE,
@@ -366,6 +440,7 @@ function emptyProfile(): Profile {
     levelStats: DEFAULT_PROFILE.levelStats.map((stats) => ({ ...stats })),
     achievements: [],
     bestiary: {},
+    daily: { key: getDailyKey(), used: false, bestScore: 0, bestRank: null },
   };
 }
 
@@ -395,6 +470,7 @@ function sanitizeProfile(raw: unknown): Profile {
     achievements: sanitizeAchievements(data.achievements),
     bestiary: sanitizeBestiary(data.bestiary),
     appearance: sanitizeAppearance(data.appearance),
+    daily: sanitizeDaily(data.daily),
   };
 }
 

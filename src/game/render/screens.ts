@@ -29,6 +29,12 @@ import { BESTIARY_ENTRIES, countDiscovered } from '../core/bestiary';
 import { GAME_CONFIG, type EnemyTypeKey } from '../core/gameConfig';
 import { BOSS_CONFIG, type BossTypeKey } from '../core/bosses';
 import { LEVELS } from '../core/waves';
+import {
+  DAILY_ECHO_BONUS,
+  formatDailyKey,
+  getDailyKey,
+  getDailyRun,
+} from '../core/daily';
 import { createEnemyVisual } from './enemyArt';
 import { createBossVisual } from './bossArt';
 import { applyPlayerPalette, createPlayer } from './playerArt';
@@ -176,6 +182,8 @@ export interface GameOverStats {
   /** Сколько Эха всего накоплено в профиле. */
   echoTotal: number;
   victory: boolean;
+  /** Спуск был ежедневным: на итогах показываем отдельную отметку. */
+  daily: boolean;
   /** Номер локации, открытой этой победой (если открылась новая). */
   newlyUnlockedLevel: number | null;
   /** Достижения, открытые именно этим спуском. */
@@ -205,6 +213,8 @@ export interface ProfileController {
   buyUpgrade: (key: UpgradeKey) => { ok: boolean; message: string };
   setTrials: (trials: TrialKey[]) => void;
   selectAppearance: (id: string) => void;
+  /** Запускает ежедневный спуск, если попытка ещё не потрачена. */
+  startDaily: () => void;
 }
 
 /** Затемнение, виньетка и угли — общий фон всех меню. */
@@ -1872,6 +1882,94 @@ export function drawStartScreen(
     trialsButton.label.setColor(count > 0 ? '#7dd3fc' : '#f0c674');
   };
 
+  // --------------------------------------------------------- СПУСК ДНЯ
+  // Слева под лором: ежедневная попытка с готовым набором испытаний.
+  const dailyProfile = profileController.getProfile();
+  const dailyKey = getDailyKey();
+  const dailyRun = getDailyRun(dailyKey, dailyProfile.unlockedLevels);
+  const dailyUsed = dailyProfile.daily.key === dailyKey && dailyProfile.daily.used;
+  const dailyRoman = FLOOR_ROMAN[dailyRun.levelIndex] ?? `${dailyRun.levelIndex + 1}`;
+  const dailyLevelName = LEVELS[dailyRun.levelIndex]?.name ?? '';
+  const dailyTrialNames = dailyRun.trials.map((key) => TRIALS[key].name).join(' · ');
+
+  const dailyPanel = createPanel(scene, 70, 308, 460, 128, UI_COLORS.mana, {
+    alpha: 0.96,
+  });
+
+  const dailyHeader = scene.add.text(
+    86,
+    324,
+    `СПУСК ДНЯ · ${formatDailyKey(dailyKey)}`,
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '10px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+      letterSpacing: 1.5,
+    }
+  ).setOrigin(0, 0.5);
+
+  const dailyReward = scene.add.text(
+    514,
+    324,
+    `ЭХО ×${DAILY_ECHO_BONUS.toFixed(1)}`,
+    {
+      fontFamily: UI_FONT.mono,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#7dd3fc',
+    }
+  ).setOrigin(1, 0.5);
+
+  const dailyLocation = scene.add.text(
+    86,
+    344,
+    `ЛОКАЦИЯ ${dailyRoman} · ${dailyLevelName.toUpperCase()}`,
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '11px',
+      fontStyle: 'bold',
+      color: '#f0c674',
+      letterSpacing: 1,
+    }
+  ).setOrigin(0, 0.5);
+
+  const dailyTrials = scene.add.text(86, 364, `ИСПЫТАНИЯ · ${dailyTrialNames}`, {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    color: '#c3cedd',
+    letterSpacing: 0.5,
+  }).setOrigin(0, 0.5);
+
+  const dailyStatus = scene.add.text(
+    86,
+    382,
+    dailyUsed
+      ? dailyProfile.daily.bestRank
+        ? `ИСПОЛЬЗОВАНА · ЛУЧШИЙ РЕЗУЛЬТАТ ${dailyProfile.daily.bestRank} · ${formatNumber(dailyProfile.daily.bestScore)}`
+        : 'ПОПЫТКА ИСПОЛЬЗОВАНА'
+      : 'ОДНА ПОПЫТКА В ДЕНЬ',
+    {
+      fontFamily: UI_FONT.body,
+      fontSize: '9px',
+      fontStyle: 'bold',
+      color: dailyUsed ? '#8b9bb0' : '#7dd3fc',
+      letterSpacing: 0.5,
+    }
+  ).setOrigin(0, 0.5);
+
+  const dailyButton = createButton(scene, 446, 408, 148, 34, dailyUsed ? 'ЗАВТРА' : 'НАЧАТЬ', {
+    variant: dailyUsed ? 'ghost' : 'primary',
+    accent: UI_COLORS.mana,
+    accentHex: '#e0f2fe',
+    onClick: () => profileController.startDaily(),
+    fontSize: 11,
+  });
+  if (dailyUsed) {
+    dailyButton.background.disableInteractive();
+    dailyButton.container.setAlpha(0.45);
+  }
+
   // ------------------------------------------------ ХРОНИКА В ПРАВОЙ КОЛОНКЕ
   // Сверху Эхо, отдельный блок ранга, построчные рекорды и полоса мастерства.
   const statsPanel = createPanel(scene, 840, 492, 320, 200, UI_COLORS.brass, {
@@ -2029,6 +2127,13 @@ export function drawStartScreen(
     helpButton.container,
     bookButton.container,
     trialsButton.container,
+    dailyPanel,
+    dailyHeader,
+    dailyReward,
+    dailyLocation,
+    dailyTrials,
+    dailyStatus,
+    dailyButton.container,
     statsPanel,
     statsHeader,
     echoIcon,
@@ -2239,12 +2344,13 @@ function drawResultScreen(
     }
   ).setOrigin(0.5);
 
+  const echoPrefix = stats.daily ? 'СПУСК ДНЯ · ' : '';
   const echoText = scene.add.text(
     0,
     162,
     stats.echoMultiplier > 1
-      ? `+${stats.echoGained} ЭХА · ×${stats.echoMultiplier.toFixed(2)} · ВСЕГО ${stats.echoTotal}`
-      : `+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
+      ? `${echoPrefix}+${stats.echoGained} ЭХА · ×${stats.echoMultiplier.toFixed(2)} · ВСЕГО ${stats.echoTotal}`
+      : `${echoPrefix}+${stats.echoGained} ЭХА · ВСЕГО ${stats.echoTotal}`,
     {
       fontFamily: UI_FONT.body,
       fontSize: '13px',

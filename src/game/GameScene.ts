@@ -700,39 +700,9 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Прицел хранится «как есть»: рыцарь смотрит точно туда, куда ведёт палец.
-    // Доводка к врагу добавляется только к углу выстрела (см. tryFireProjectile).
+    // Прицел хранится «как есть»: рыцарь смотрит точно туда, куда ведёт палец,
+    // и снаряд летит по этому же углу без доводки.
     this.touchAimAngle = Math.atan2(dy, dx);
-  }
-
-  /**
-   * Слабая доводка снаряда к врагу. Выбирается не ближайший по расстоянию,
-   * а тот, кто ближе всего к лучу прицела: иначе помощь тянет в сторону.
-   * Дальше TOUCH_AIM_ASSIST_RANGE цели не рассматриваются.
-   */
-  private applyAimAssist(angle: number): number {
-    const { TOUCH_AIM_ASSIST_ANGLE, TOUCH_AIM_ASSIST_STRENGTH, TOUCH_AIM_ASSIST_RANGE } =
-      GAME_CONFIG.COMBAT;
-
-    let target: EnemyEntity | null = null;
-    let bestDelta: number = TOUCH_AIM_ASSIST_ANGLE;
-
-    for (const enemy of this.enemies) {
-      const distance = Phaser.Math.Distance.Between(this.playerX, this.playerY, enemy.x, enemy.y);
-      if (distance > TOUCH_AIM_ASSIST_RANGE) continue;
-
-      const enemyAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, enemy.x, enemy.y);
-      const delta = Math.abs(Phaser.Math.Angle.Wrap(enemyAngle - angle));
-      if (delta >= bestDelta) continue;
-
-      bestDelta = delta;
-      target = enemy;
-    }
-
-    if (!target) return angle;
-
-    const targetAngle = Phaser.Math.Angle.Between(this.playerX, this.playerY, target.x, target.y);
-    return angle + Phaser.Math.Angle.Wrap(targetAngle - angle) * TOUCH_AIM_ASSIST_STRENGTH;
   }
 
   private endTouchPointer(pointer: Phaser.Input.Pointer): void {
@@ -900,16 +870,11 @@ export class GameScene extends Phaser.Scene {
     this.fireCooldown = this.getFireCooldown();
     this.shotsFired++;
 
-    // Доводка работает только для выстрела со стика прицела: на ПК и с
-    // клавиатуры угол остаётся ровно тем, куда смотрит курсор.
-    const aimedByStick = this.touchAimPointerId !== null && this.touchAimAngle !== null;
-    const shotAngle = aimedByStick ? this.applyAimAssist(this.aimAngle) : this.aimAngle;
-
-    this.spawnPlayerProjectile(shotAngle);
+    this.spawnPlayerProjectile(this.aimAngle);
 
     // «Раздвоенный луч»: второй снаряд летит чуть вбок.
     if (this.boons.has('DOUBLE_SHOT')) {
-      this.spawnPlayerProjectile(shotAngle + 0.13);
+      this.spawnPlayerProjectile(this.aimAngle + 0.13);
     }
   }
 
@@ -1235,7 +1200,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnEnemy(type: EnemyTypeKey): void {
-    const cfg = GAME_CONFIG.ENEMIES[type];
+    // Скорость берём из конфига на момент спавна: испытание «Быстрые тени»
+    // действует только на этот спуск и не меняет общий конфиг.
+    const base = GAME_CONFIG.ENEMIES[type];
+    const cfg: EnemyConfig = {
+      ...base,
+      speed: base.speed * this.trialEffects.enemySpeedMultiplier,
+    };
     const crack = Phaser.Utils.Array.GetRandom(this.cracks);
     const visual = createEnemyVisual(this, type, cfg, crack.x, crack.y);
 
@@ -1276,7 +1247,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnBoss(key: BossTypeKey): void {
-    const cfg = BOSS_CONFIG[key];
+    const base = BOSS_CONFIG[key];
+    const cfg: BossConfig = {
+      ...base,
+      speed: base.speed * this.trialEffects.enemySpeedMultiplier,
+    };
     // Босс крупный, поэтому появляется в глубине зала, а не из разлома у стены.
     const { WIDTH, HEIGHT } = GAME_CONFIG.WORLD;
     const spawnX = WIDTH / 2;

@@ -367,7 +367,7 @@ function createHelpModal(scene: Phaser.Scene, screen: Phaser.GameObjects.Contain
       'Победа открывает следующую локацию'
   );
 
-  const closeButton = createButton(scene, 0, 200, 220, 46, 'ЗАКРЫТЬ', {
+  const closeButton = createButton(scene, 0, 214, 220, 46, 'ЗАКРЫТЬ', {
     variant: 'secondary',
     onClick: () => close(),
     fontSize: 14,
@@ -524,7 +524,7 @@ function createSettingsModal(
     muteButton.label.setColor(current.muted ? '#fca5a5' : '#e2e8f0');
   }
 
-  const resetButton = createButton(scene, width / 2 - 130, 546, 220, 44, 'СБРОСИТЬ', {
+  const resetButton = createButton(scene, width / 2 - 130, 554, 220, 46, 'СБРОСИТЬ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -539,7 +539,7 @@ function createSettingsModal(
     fontSize: 12,
   });
 
-  const closeButton = createButton(scene, width / 2 + 130, 546, 220, 44, 'ЗАКРЫТЬ', {
+  const closeButton = createButton(scene, width / 2 + 130, 554, 220, 46, 'ЗАКРЫТЬ', {
     variant: 'secondary',
     onClick: () => close(),
     fontSize: 13,
@@ -891,11 +891,12 @@ function createTrialsModal(
     color: '#94a3b8',
   }).setOrigin(1, 0.5);
 
-  const iconByKey: Record<TrialKey, 'banner' | 'flame' | 'clock' | 'skull'> = {
+  const iconByKey: Record<TrialKey, 'banner' | 'flame' | 'clock' | 'skull' | 'bolt'> = {
     GLASS: 'banner',
     DIM_TORCH: 'flame',
     FAST_DARK: 'clock',
     CROWD: 'skull',
+    SWIFT_SHADOWS: 'bolt',
   };
 
   /**
@@ -1600,7 +1601,7 @@ function createGuardBookModal(
   // Сразу выбираем вкладку, чтобы они не перехватывали клики по лагерю.
   setTab('ACHIEVEMENTS');
 
-  const closeButton = createButton(scene, 640, 618, 220, 42, 'ЗАКРЫТЬ', {
+  const closeButton = createButton(scene, 640, 626, 220, 46, 'ЗАКРЫТЬ', {
     variant: 'secondary',
     onClick: () => close(),
     fontSize: 13,
@@ -1772,7 +1773,7 @@ export function drawStartScreen(
     letterSpacing: 4,
   }).setOrigin(0.5);
 
-  const startButton = createButton(scene, menuX, 250, 320, 64, 'СПУСТИТЬСЯ', {
+  const startButton = createButton(scene, menuX, 256, 320, 64, 'СПУСТИТЬСЯ', {
     variant: 'primary',
     accent: UI_COLORS.ember,
     accentHex: '#fff7ed',
@@ -1840,13 +1841,13 @@ export function drawStartScreen(
 
   renderLevel();
 
-  const upgradesButton = createButton(scene, menuX, 334, 320, 50, 'УЛУЧШЕНИЯ', {
+  const upgradesButton = createButton(scene, menuX, 327, 320, 50, 'УЛУЧШЕНИЯ', {
     variant: 'secondary',
     onClick: () => upgradesModal.open(),
     fontSize: 14,
   });
 
-  const settingsButton = createButton(scene, menuX, 398, 320, 50, 'НАСТРОЙКИ', {
+  const settingsButton = createButton(scene, menuX, 390, 320, 50, 'НАСТРОЙКИ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -1856,7 +1857,7 @@ export function drawStartScreen(
 
   const book = createGuardBookModal(scene, screen, profileController);
 
-  const helpButton = createButton(scene, menuX - 110, 462, 100, 50, 'ПАМЯТКА', {
+  const helpButton = createButton(scene, menuX - 110, 453, 100, 50, 'ПАМЯТКА', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -1864,7 +1865,7 @@ export function drawStartScreen(
     fontSize: 10,
   });
 
-  const bookButton = createButton(scene, menuX, 462, 100, 50, 'КНИГА', {
+  const bookButton = createButton(scene, menuX, 453, 100, 50, 'КНИГА', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -1872,7 +1873,7 @@ export function drawStartScreen(
     fontSize: 10,
   });
 
-  const trialsButton = createButton(scene, menuX + 110, 462, 100, 50, 'ИСПЫТАНИЯ', {
+  const trialsButton = createButton(scene, menuX + 110, 453, 100, 50, 'ИСПЫТАНИЯ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -1888,7 +1889,8 @@ export function drawStartScreen(
   };
 
   // --------------------------------------------------------- СПУСК ДНЯ
-  // Слева под лором: ежедневная попытка с готовым набором испытаний.
+  // Справа от логотипа, в свободной зоне стены: карточка не закрывает
+  // центральную арку, костёр и сидящего стража.
   const dailyProfile = profileController.getProfile();
   const dailyKey = getDailyKey();
   const dailyRun = getDailyRun(dailyKey, dailyProfile.unlockedLevels);
@@ -1897,58 +1899,49 @@ export function drawStartScreen(
   const dailyLevelName = LEVELS[dailyRun.levelIndex]?.name ?? '';
   const dailyTrialNames = dailyRun.trials.map((key) => TRIALS[key].name).join(' · ');
 
-  const dailyPanel = createPanel(scene, 70, 308, 460, 128, UI_COLORS.mana, {
+  const dailyPanel = createPanel(scene, 540, 56, 290, 120, UI_COLORS.mana, {
     alpha: 0.96,
   });
 
-  const dailyHeader = scene.add.text(
-    86,
-    324,
-    `СПУСК ДНЯ · ${formatDailyKey(dailyKey)}`,
-    {
-      fontFamily: UI_FONT.body,
-      fontSize: '10px',
-      fontStyle: 'bold',
-      color: '#7dd3fc',
-      letterSpacing: 1.5,
-    }
-  ).setOrigin(0, 0.5);
+  const dailyHeader = scene.add.text(556, 70, `СПУСК ДНЯ · ${formatDailyKey(dailyKey)}`, {
+    fontFamily: UI_FONT.body,
+    fontSize: '9px',
+    fontStyle: 'bold',
+    color: '#7dd3fc',
+    letterSpacing: 1,
+  }).setOrigin(0, 0.5);
 
-  const dailyReward = scene.add.text(
-    514,
-    324,
-    `ЭХО ×${DAILY_ECHO_BONUS.toFixed(1)}`,
-    {
-      fontFamily: UI_FONT.mono,
-      fontSize: '11px',
-      fontStyle: 'bold',
-      color: '#7dd3fc',
-    }
-  ).setOrigin(1, 0.5);
+  const dailyReward = scene.add.text(814, 70, `ЭХО ×${DAILY_ECHO_BONUS.toFixed(1)}`, {
+    fontFamily: UI_FONT.mono,
+    fontSize: '10px',
+    fontStyle: 'bold',
+    color: '#7dd3fc',
+  }).setOrigin(1, 0.5);
 
   const dailyLocation = scene.add.text(
-    86,
-    344,
+    556,
+    88,
     `ЛОКАЦИЯ ${dailyRoman} · ${dailyLevelName.toUpperCase()}`,
     {
       fontFamily: UI_FONT.body,
-      fontSize: '11px',
+      fontSize: '9px',
       fontStyle: 'bold',
       color: '#f0c674',
-      letterSpacing: 1,
+      letterSpacing: 0.5,
     }
   ).setOrigin(0, 0.5);
 
-  const dailyTrials = scene.add.text(86, 364, `ИСПЫТАНИЯ · ${dailyTrialNames}`, {
+  const dailyTrials = scene.add.text(556, 104, `ИСПЫТАНИЯ · ${dailyTrialNames}`, {
     fontFamily: UI_FONT.body,
-    fontSize: '9px',
+    fontSize: '8px',
     color: '#c3cedd',
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
+    wordWrap: { width: 258 },
   }).setOrigin(0, 0.5);
 
   const dailyStatus = scene.add.text(
-    86,
-    382,
+    556,
+    120,
     dailyUsed
       ? dailyProfile.daily.bestRank
         ? `ИСПОЛЬЗОВАНА · ЛУЧШИЙ РЕЗУЛЬТАТ ${dailyProfile.daily.bestRank} · ${formatNumber(dailyProfile.daily.bestScore)}`
@@ -1956,19 +1949,19 @@ export function drawStartScreen(
       : 'ОДНА ПОПЫТКА В ДЕНЬ',
     {
       fontFamily: UI_FONT.body,
-      fontSize: '9px',
+      fontSize: '8px',
       fontStyle: 'bold',
       color: dailyUsed ? '#8b9bb0' : '#7dd3fc',
-      letterSpacing: 0.5,
+      letterSpacing: 0.3,
     }
   ).setOrigin(0, 0.5);
 
-  const dailyButton = createButton(scene, 446, 408, 148, 34, dailyUsed ? 'ЗАВТРА' : 'НАЧАТЬ', {
+  const dailyButton = createButton(scene, 685, 150, 258, 30, dailyUsed ? 'ЗАВТРА' : 'НАЧАТЬ', {
     variant: dailyUsed ? 'ghost' : 'primary',
     accent: UI_COLORS.mana,
     accentHex: '#e0f2fe',
     onClick: () => profileController.startDaily(),
-    fontSize: 11,
+    fontSize: 10,
   });
   if (dailyUsed) {
     dailyButton.background.disableInteractive();
@@ -1999,21 +1992,21 @@ export function drawStartScreen(
 
   const statsDividerTop = createDivider(scene, 1000, 518, 288, UI_COLORS.brass);
 
-  const rankMedallion = createMedallion(scene, 872, 542, 16, UI_COLORS.brass);
-  const rankLetter = scene.add.text(894, 542, '—', {
+  const rankMedallion = createMedallion(scene, 872, 546, 16, UI_COLORS.brass);
+  const rankLetter = scene.add.text(894, 546, '—', {
     fontFamily: UI_FONT.display,
     fontSize: '32px',
     fontStyle: 'bold',
     color: '#64748b',
   }).setOrigin(0, 0.5);
-  const rankCaption = scene.add.text(1144, 530, 'ЛУЧШИЙ РАНГ', {
+  const rankCaption = scene.add.text(856, 524, 'ЛУЧШИЙ РАНГ', {
     fontFamily: UI_FONT.body,
     fontSize: '8px',
     fontStyle: 'bold',
     color: '#7c8ba1',
     letterSpacing: 1.5,
-  }).setOrigin(1, 0.5);
-  const rankTitle = scene.add.text(894, 562, 'ПОКА НЕТ', {
+  }).setOrigin(0, 0.5);
+  const rankTitle = scene.add.text(894, 546, 'ПОКА НЕТ', {
     fontFamily: UI_FONT.body,
     fontSize: '9px',
     fontStyle: 'bold',
@@ -2091,6 +2084,9 @@ export function drawStartScreen(
     rankLetter.setColor(style?.hex ?? '#64748b');
     rankTitle.setText(levelStats.bestRank ? RANK_TITLES[levelStats.bestRank] : 'ПОКА НЕТ');
     rankTitle.setColor(style?.hex ?? '#64748b');
+    // Название стоит справа от буквы: ширина ранга разная, поэтому позиция
+    // пересчитывается после смены текста и кегля.
+    rankTitle.setPosition(rankLetter.x + rankLetter.width + 10, rankLetter.y);
 
     statRows[0].value.setText(formatNumber(levelStats.bestScore));
     statRows[1].value.setText(formatRunTime(levelStats.bestTime));
@@ -2395,7 +2391,7 @@ function drawResultScreen(
     newAchievements.length === 1
       ? `НОВОЕ ДОСТИЖЕНИЕ · ${newAchievements[0]}`
       : `НОВЫХ ДОСТИЖЕНИЙ: ${newAchievements.length}`;
-  const achievementText = scene.add.text(0, 204, achievementLine, {
+  const achievementText = scene.add.text(0, 198, achievementLine, {
     fontFamily: UI_FONT.body,
     fontSize: '10px',
     fontStyle: 'bold',
@@ -2403,8 +2399,8 @@ function drawResultScreen(
     letterSpacing: 1,
   }).setOrigin(0.5).setVisible(newAchievements.length > 0);
 
-  const primaryY = newAchievements.length > 0 ? 240 : 226;
-  const secondaryY = newAchievements.length > 0 ? 296 : 284;
+  const primaryY = newAchievements.length > 0 ? 236 : 226;
+  const secondaryY = newAchievements.length > 0 ? 298 : 288;
 
   const primaryButton = createButton(scene, 0, primaryY, 340, 58, options.primaryLabel, {
     variant: 'primary',
@@ -2567,13 +2563,13 @@ export function drawPauseScreen(
     fontSize: 16,
   });
 
-  const restartButton = createButton(scene, 0, 192, 340, 48, 'НАЧАТЬ ЗАНОВО', {
+  const restartButton = createButton(scene, 0, 190, 340, 48, 'НАЧАТЬ ЗАНОВО', {
     variant: 'secondary',
     onClick: onRestart,
     fontSize: 14,
   });
 
-  const settingsButton = createButton(scene, -105, 244, 190, 40, 'НАСТРОЙКИ', {
+  const settingsButton = createButton(scene, -100, 246, 190, 40, 'НАСТРОЙКИ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',
@@ -2581,7 +2577,7 @@ export function drawPauseScreen(
     fontSize: 12,
   });
 
-  const menuButton = createButton(scene, 115, 244, 220, 40, 'В ЛАГЕРЬ', {
+  const menuButton = createButton(scene, 100, 246, 190, 40, 'В ЛАГЕРЬ', {
     variant: 'ghost',
     accent: UI_COLORS.brass,
     accentHex: '#f0c674',

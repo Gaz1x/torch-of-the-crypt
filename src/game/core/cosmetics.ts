@@ -4,9 +4,13 @@
 // только внешний вид рыцаря в крипте и в «Книге стража».
 // ============================================================================
 
+export type KnightModel = 'STEWARD' | 'ASH' | 'BRASS' | 'FROST' | 'CRIMSON' | 'FLAME';
+
 export interface KnightPalette {
   id: string;
   name: string;
+  /** Силуэт рыцаря: облик меняет не только цвета, но и детали модели. */
+  model: KnightModel;
   /** Сколько достижений нужно, чтобы открыть облик. */
   threshold: number;
   /** Плащ: внешний слой, внутренний и цвет складок. */
@@ -26,6 +30,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'STEWARD',
     name: 'СТРАЖ',
+    model: 'STEWARD',
     threshold: 0,
     cloakDark: 0x5b1414,
     cloak: 0x991b1b,
@@ -37,6 +42,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'ASH',
     name: 'ПЕПЕЛ',
+    model: 'ASH',
     threshold: 3,
     cloakDark: 0x1e293b,
     cloak: 0x475569,
@@ -48,6 +54,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'BRASS',
     name: 'ЛАТУНЬ',
+    model: 'BRASS',
     threshold: 6,
     cloakDark: 0x451a03,
     cloak: 0x92400e,
@@ -59,6 +66,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'FROST',
     name: 'ИНЕЙ',
+    model: 'FROST',
     threshold: 9,
     cloakDark: 0x0f1e4a,
     cloak: 0x1e3a8a,
@@ -70,6 +78,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'CRIMSON',
     name: 'БАГРЯНЕЦ',
+    model: 'CRIMSON',
     threshold: 12,
     cloakDark: 0x3f0a0a,
     cloak: 0x7f1d1d,
@@ -81,6 +90,7 @@ export const PALETTES: KnightPalette[] = [
   {
     id: 'FLAME',
     name: 'ПЛАМЯ',
+    model: 'FLAME',
     threshold: 15,
     cloakDark: 0x431407,
     cloak: 0x9a3412,

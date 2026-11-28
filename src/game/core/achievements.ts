@@ -34,7 +34,7 @@ export interface AchievementDefinition {
   check: (profile: Profile) => boolean;
 }
 
-/** Порядок рангов для сравнения: A остался только в старых сохранениях. */
+/** Порядок рангов для сравнения: от смерти к максимальной победе. */
 const RANK_ORDER: RankLetter[] = ['B', 'A', 'S', 'SS', 'SS+', 'SSS', 'SSS+'];
 
 function rankAtLeast(letter: RankLetter | null, target: RankLetter): boolean {

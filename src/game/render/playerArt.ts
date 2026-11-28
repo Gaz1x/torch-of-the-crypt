@@ -54,6 +54,8 @@ export interface PlayerVisual {
     staffGemGlow: Phaser.GameObjects.Arc;
     staffGem: Phaser.GameObjects.Arc;
     visor: Phaser.GameObjects.Rectangle;
+    /** Силуэт облика: капюшон, гребень, корона или рога. */
+    decor: Phaser.GameObjects.Graphics;
   };
 }
 
@@ -64,6 +66,78 @@ function drawCloakFolds(graphics: Phaser.GameObjects.Graphics, color: number): v
   graphics.lineBetween(-9, -7, -15, -3);
   graphics.lineBetween(-9, 0, -16, 0);
   graphics.lineBetween(-9, 7, -15, 3);
+}
+
+/** Дополнительный слой: у каждого облика свой силуэт поверх базовой модели. */
+function drawModelDecor(graphics: Phaser.GameObjects.Graphics, palette: KnightPalette): void {
+  graphics.clear();
+  const p = (x: number, y: number): Phaser.Math.Vector2 => new Phaser.Math.Vector2(x, y);
+
+  switch (palette.model) {
+    case 'ASH': {
+      // Капюшон: тёмный полумесяц вокруг затылка.
+      const hood = [
+        p(-2, -12),
+        p(-9, -11),
+        p(-14, -5),
+        p(-15, 0),
+        p(-14, 5),
+        p(-9, 11),
+        p(-2, 12),
+        p(1, 6),
+        p(2, 0),
+        p(1, -6),
+      ];
+      graphics.fillStyle(palette.cloakDark, 1);
+      graphics.fillPoints(hood, true);
+      graphics.lineStyle(1, palette.cloakTrim, 1);
+      graphics.strokePoints(hood, true);
+      break;
+    }
+    case 'BRASS': {
+      // Гребень на шлеме.
+      const crest = [p(-2, -9), p(-9, -18), p(-15, -13), p(-5, -6)];
+      graphics.fillStyle(palette.metal, 1);
+      graphics.fillPoints(crest, true);
+      graphics.lineStyle(1, palette.cloakTrim, 0.8);
+      graphics.strokePoints(crest, true);
+      break;
+    }
+    case 'FROST': {
+      // Ледяная корона: три шипа с мерцающими кончиками.
+      graphics.fillStyle(palette.metal, 1);
+      graphics.fillTriangle(-7, -8, -9, -17, -3, -9);
+      graphics.fillTriangle(-1, -9, 0, -21, 2, -9);
+      graphics.fillTriangle(3, -8, 6, -16, 7, -7);
+      graphics.fillStyle(palette.glow, 1);
+      graphics.fillCircle(-9, -17, 1.4);
+      graphics.fillCircle(0, -21, 1.4);
+      graphics.fillCircle(6, -16, 1.4);
+      break;
+    }
+    case 'CRIMSON': {
+      // Рога по сторонам шлема.
+      graphics.fillStyle(palette.metal, 1);
+      graphics.fillTriangle(-4, -8, -11, -17, -1, -9);
+      graphics.fillTriangle(-4, 8, -11, 17, -1, 9);
+      break;
+    }
+    case 'FLAME': {
+      // Огненная корона: языки пламени.
+      graphics.fillStyle(palette.metal, 1);
+      graphics.fillTriangle(-8, -8, -10, -18, -3, -9);
+      graphics.fillTriangle(-2, -9, 0, -22, 2, -9);
+      graphics.fillTriangle(3, -8, 7, -17, 7, -7);
+      graphics.fillStyle(palette.glow, 1);
+      graphics.fillTriangle(-6, -9, -8, -15, -4, -9);
+      graphics.fillTriangle(-1, -10, 0, -18, 1, -10);
+      graphics.fillTriangle(4, -8, 6, -14, 6, -8);
+      break;
+    }
+    default:
+      // СТРАЖ — базовая модель без дополнительных деталей.
+      break;
+  }
 }
 
 /** Перекрашивает уже созданного рыцаря под выбранный облик. */
@@ -83,6 +157,7 @@ export function applyPlayerPalette(visual: PlayerVisual, palette: KnightPalette)
   parts.staffGemGlow.setFillStyle(palette.glow, 0.35);
   parts.staffGem.setFillStyle(palette.glow);
   parts.visor.setFillStyle(palette.glow);
+  drawModelDecor(parts.decor, palette);
 }
 
 export function createPlayer(
@@ -151,6 +226,10 @@ export function createPlayer(
   const visorH = scene.add.rectangle(5, 0, 3, 8, 0x0f172a);
   const visorCyanGlow = scene.add.rectangle(6, 0, 1.5, 5, palette.glow);
 
+  // 5. Силуэт облика поверх базовой модели.
+  const decor = scene.add.graphics();
+  drawModelDecor(decor, palette);
+
   figure.add([
     cloakBack,
     cloakFront,
@@ -175,6 +254,7 @@ export function createPlayer(
     helmetHighlight,
     visorH,
     visorCyanGlow,
+    decor,
   ]);
 
   container.add(figure);
@@ -223,6 +303,7 @@ export function createPlayer(
       staffGemGlow,
       staffGem,
       visor: visorCyanGlow,
+      decor,
     },
   };
 }

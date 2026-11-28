@@ -4,7 +4,7 @@
 // множители перемножаются. Выбор хранится в профиле, чтобы не сбрасывался.
 // ============================================================================
 
-export type TrialKey = 'GLASS' | 'DIM_TORCH' | 'FAST_DARK' | 'CROWD';
+export type TrialKey = 'GLASS' | 'DIM_TORCH' | 'FAST_DARK' | 'CROWD' | 'SWIFT_SHADOWS';
 
 export interface TrialDefinition {
   key: TrialKey;
@@ -45,10 +45,23 @@ export const TRIALS: Record<TrialKey, TrialDefinition> = {
     effect: '+25% врагов, +1 одновременно',
     multiplier: 1.25,
   },
+  SWIFT_SHADOWS: {
+    key: 'SWIFT_SHADOWS',
+    name: 'БЫСТРЫЕ ТЕНИ',
+    description: 'Тьма торопится: каждая тень движется быстрее обычного.',
+    effect: 'Скорость врагов +20%',
+    multiplier: 1.25,
+  },
 };
 
 /** Порядок карточек в окне испытаний. */
-export const TRIAL_ORDER: TrialKey[] = ['GLASS', 'DIM_TORCH', 'FAST_DARK', 'CROWD'];
+export const TRIAL_ORDER: TrialKey[] = [
+  'GLASS',
+  'DIM_TORCH',
+  'FAST_DARK',
+  'CROWD',
+  'SWIFT_SHADOWS',
+];
 
 /** Числовые эффекты испытаний: сцена не знает о конкретных ключах. */
 export const TRIAL_VALUES = {
@@ -57,6 +70,7 @@ export const TRIAL_VALUES = {
   FAST_PHASE_MULTIPLIER: 0.7,
   CROWD_SPAWN_MULTIPLIER: 1.25,
   CROWD_MAX_ALIVE_BONUS: 1,
+  SWIFT_SHADOWS_SPEED_MULTIPLIER: 1.2,
 } as const;
 
 /** Во сколько раз испытания увеличивают очки и Эхо за спуск. */
@@ -81,6 +95,8 @@ export interface TrialEffects {
   phaseThresholdMultiplier: number;
   spawnMultiplier: number;
   maxAliveBonus: number;
+  /** Множитель скорости врагов и боссов. */
+  enemySpeedMultiplier: number;
   /** Множитель итоговых очков и Эха. */
   scoreMultiplier: number;
 }
@@ -94,6 +110,9 @@ export function getTrialEffects(active: ReadonlySet<TrialKey>): TrialEffects {
       : 1,
     spawnMultiplier: active.has('CROWD') ? TRIAL_VALUES.CROWD_SPAWN_MULTIPLIER : 1,
     maxAliveBonus: active.has('CROWD') ? TRIAL_VALUES.CROWD_MAX_ALIVE_BONUS : 0,
+    enemySpeedMultiplier: active.has('SWIFT_SHADOWS')
+      ? TRIAL_VALUES.SWIFT_SHADOWS_SPEED_MULTIPLIER
+      : 1,
     scoreMultiplier: getTrialMultiplier(active),
   };
 }

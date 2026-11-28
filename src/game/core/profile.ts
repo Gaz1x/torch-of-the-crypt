@@ -37,11 +37,10 @@ export interface RankStats {
 }
 
 /** Ранги за победу по числу включённых испытаний. */
-export const VICTORY_RANKS = ['S', 'SS', 'SS+', 'SSS', 'SSS+'] as const;
+export const VICTORY_RANKS = ['A', 'S', 'SS', 'SS+', 'SSS', 'SSS+'] as const;
 
 export const RANK_TITLES: Record<RankLetter, string> = {
   B: 'ВЫЖИВШИЙ',
-  // A остался только в старых сохранениях: новые забеги его не выдают.
   A: 'СТРАЖ КРИПТЫ',
   S: 'ЛЕГЕНДА ПЛАМЕНИ',
   SS: 'ХРАНИТЕЛЬ ОГНЯ',
@@ -128,8 +127,8 @@ export const DEFAULT_PROFILE: Profile = {
 };
 
 /**
- * Смерть всегда даёт B. Победа поднимает ранг на ступень за каждое
- * включённое испытание: S → SS → SS+ → SSS → SSS+.
+ * Смерть всегда даёт B. Победа без испытаний — A, каждое включённое
+ * испытание поднимает ранг на ступень: S → SS → SS+ → SSS → SSS+.
  */
 export function calculateRank(stats: RankStats): RankResult {
   if (!stats.victory) {

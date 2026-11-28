@@ -45,6 +45,8 @@ export interface ProjectileEntity {
   life: number;
   /** Сколько ещё врагов снаряд пробьёт, прежде чем исчезнуть. */
   pierce: number;
+  /** Урон одного попадания (растёт от дара «Жаркий удар»). */
+  damage: number;
   /** Враги, которые уже пропустили снаряд сквозь себя. */
   hitEnemies?: EnemyEntity[];
 }

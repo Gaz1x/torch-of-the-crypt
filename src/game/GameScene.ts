@@ -4,7 +4,7 @@ import { GAME_CONFIG, type EnemyConfig, type EnemyTypeKey } from './core/gameCon
 import { BOSS_CONFIG, type BossConfig, type BossTypeKey } from './core/bosses';
 import { LEVELS, getFloorIndex, isFloorEnd, type LevelConfig, type WaveConfig } from './core/waves';
 import { getPhase, getPhaseProgress, PHASES, type PhaseKey } from './core/phases';
-import { pickBoonChoices, BOON_ORDER, BOONS, type BoonKey } from './core/boons';
+import { pickBoonChoices, BOON_EFFECTS, type BoonKey } from './core/boons';
 import {
   applyRun,
   calculateRank,
@@ -174,6 +174,8 @@ export class GameScene extends Phaser.Scene {
   private bossAddsTimer = 0;
   /** Дары, выбранные в этом спуске. Живут только до конца партии. */
   private boons = new Set<BoonKey>();
+  /** «Последняя искра» срабатывает один раз за спуск. */
+  private lastSparkUsed = false;
 
   // Аналитика (Метрика): номер попытки в визите и глубина текущего спуска.
   /** Номер попытки с момента загрузки страницы (1, 2, 3…). */
@@ -469,9 +471,12 @@ export class GameScene extends Phaser.Scene {
     this.updateInvulnerability(time, dt);
     this.updateTorchDrain(dt);
 
+    const manaRegen = this.boons.has('QUIET_FLAME')
+      ? BOON_EFFECTS.QUIET_FLAME_REGEN_MULTIPLIER
+      : 1;
     this.mana = Math.min(
       GAME_CONFIG.COMBAT.MAX_MANA,
-      this.mana + GAME_CONFIG.COMBAT.PASSIVE_MANA_REGEN * dt
+      this.mana + GAME_CONFIG.COMBAT.PASSIVE_MANA_REGEN * manaRegen * dt
     );
 
     this.handlePlayerMovement(dt);
@@ -751,8 +756,12 @@ export class GameScene extends Phaser.Scene {
     }
 
     const { WIDTH, HEIGHT, PADDING } = GAME_CONFIG.WORLD;
-    // Замедление действует в фазе, когда факел погас (см. core/phases.ts)
-    const speed = GAME_CONFIG.PLAYER.SPEED * PHASES[this.currentPhase].playerSpeedFactor;
+    // Замедление действует в фазе, когда факел погас (см. core/phases.ts).
+    // «Лёгкий шаг» добавляет свой множитель поверх фазы.
+    const boonSpeed = this.boons.has('LIGHT_STEP')
+      ? BOON_EFFECTS.LIGHT_STEP_SPEED_MULTIPLIER
+      : 1;
+    const speed = GAME_CONFIG.PLAYER.SPEED * PHASES[this.currentPhase].playerSpeedFactor * boonSpeed;
 
     this.playerX = Phaser.Math.Clamp(this.playerX + vx * speed * dt, PADDING, WIDTH - PADDING);
     this.playerY = Phaser.Math.Clamp(this.playerY + vy * speed * dt, PADDING, HEIGHT - PADDING);
@@ -854,7 +863,9 @@ export class GameScene extends Phaser.Scene {
   /** Перезарядка с учётом улучшения «Быстрая рука» и дара «Скорое пламя». */
   private getFireCooldown(): number {
     const base = GAME_CONFIG.COMBAT.FIRE_COOLDOWN * this.cooldownMultiplier;
-    return this.boons.has('RAPID_FIRE') ? base * 0.75 : base;
+    return this.boons.has('RAPID_FIRE')
+      ? base * BOON_EFFECTS.RAPID_FIRE_COOLDOWN_MULTIPLIER
+      : base;
   }
 
   private tryFireProjectile(): void {
@@ -901,6 +912,9 @@ export class GameScene extends Phaser.Scene {
       vy: Math.sin(angle) * PROJECTILE_SPEED,
       life: PROJECTILE_LIFE,
       pierce: this.boons.has('PIERCE') ? 1 : 0,
+      damage:
+        GAME_CONFIG.COMBAT.PROJECTILE_DAMAGE +
+        (this.boons.has('HOT_SHOT') ? BOON_EFFECTS.HOT_SHOT_DAMAGE : 0),
     });
   }
 
@@ -964,6 +978,9 @@ export class GameScene extends Phaser.Scene {
 
   private updateManaOrbs(dt: number, time: number): void {
     const { MAGNET_RADIUS, PICKUP_RADIUS, MAGNET_SPEED } = GAME_CONFIG.MANA_ORB;
+    const magnetRadius = this.boons.has('WIDE_GATHER')
+      ? MAGNET_RADIUS * BOON_EFFECTS.WIDE_GATHER_MAGNET_MULTIPLIER
+      : MAGNET_RADIUS;
 
     for (let i = this.manaOrbs.length - 1; i >= 0; i--) {
       const orb = this.manaOrbs[i];
@@ -972,7 +989,7 @@ export class GameScene extends Phaser.Scene {
 
       const dist = Phaser.Math.Distance.Between(orb.x, orb.y, this.playerX, this.playerY);
 
-      if (dist < MAGNET_RADIUS) {
+      if (dist < magnetRadius) {
         const angle = Phaser.Math.Angle.Between(orb.x, orb.y, this.playerX, this.playerY);
         orb.x += Math.cos(angle) * MAGNET_SPEED * dt;
         orb.y += Math.sin(angle) * MAGNET_SPEED * dt;
@@ -1172,11 +1189,17 @@ export class GameScene extends Phaser.Scene {
     });
     this.boons.add(key);
 
-    // Стойкость повышает запас сразу, остальные дары читаются в бою.
+    // Часть даров срабатывает сразу: здоровье, лечение и пересчёт света.
     if (key === 'VITALITY') {
       this.raiseMaxHp(1);
       this.hp = Math.min(this.maxHp, this.hp + 1);
+    } else if (key === 'CRYPT_HEART') {
+      this.raiseMaxHp(BOON_EFFECTS.CRYPT_HEART_HP);
+      this.hp = this.maxHp;
     }
+
+    // «Ясный взгляд» и «Вечный факел» меняют радиус света — обновляем его.
+    this.applyCurrentPhase();
 
     this.uiOverlay.removeAll(true);
     this.gameState = 'PLAYING';
@@ -1191,12 +1214,18 @@ export class GameScene extends Phaser.Scene {
     const mastery = getMastery(this.profile.levelStats[this.levelIndex]?.victories ?? 0);
     if (!mastery.startingBoon) return;
 
-    const key = BOON_ORDER[Math.floor(Math.random() * BOON_ORDER.length)];
-    this.boons.add(key);
-    if (key === 'VITALITY') this.raiseMaxHp(1);
+    const [boon] = pickBoonChoices(this.boons, 1);
+    if (!boon) return;
 
-    showMasteryNotice(this, BOONS[key].name, BOONS[key].effect);
-    track('mastery_boon', { location: this.levelIndex + 1, boon: key });
+    this.boons.add(boon.key);
+    if (boon.key === 'VITALITY') {
+      this.raiseMaxHp(1);
+    } else if (boon.key === 'CRYPT_HEART') {
+      this.raiseMaxHp(BOON_EFFECTS.CRYPT_HEART_HP);
+    }
+
+    showMasteryNotice(this, boon.name, boon.effect);
+    track('mastery_boon', { location: this.levelIndex + 1, boon: boon.key });
   }
 
   private spawnEnemy(type: EnemyTypeKey): void {
@@ -1340,7 +1369,7 @@ export class GameScene extends Phaser.Scene {
             this.projectiles.splice(j, 1);
           }
 
-          e.hp -= GAME_CONFIG.COMBAT.PROJECTILE_DAMAGE;
+          e.hp -= p.damage;
           this.shotsHit++;
 
           if (e.isBoss) {
@@ -1811,12 +1840,25 @@ export class GameScene extends Phaser.Scene {
     if (this.gameState !== 'PLAYING' || this.invulnTimer > 0) return;
 
     this.hp = Math.max(0, this.hp - amount);
-    this.invulnTimer = GAME_CONFIG.PLAYER.INVULN_DURATION;
+
+    const invulnBonus = this.boons.has('SECOND_WIND')
+      ? BOON_EFFECTS.SECOND_WIND_INVULN_BONUS
+      : 0;
+    this.invulnTimer = GAME_CONFIG.PLAYER.INVULN_DURATION + invulnBonus;
 
     createDamageEffect(this, this.playerX, this.playerY);
     this.cameras.main.shake(180, 0.014);
 
     if (this.hp <= 0) {
+      // «Последняя искра»: один раз за спуск смертельный удар не убивает.
+      if (this.boons.has('LAST_SPARK') && !this.lastSparkUsed) {
+        this.lastSparkUsed = true;
+        this.hp = Math.min(this.maxHp, BOON_EFFECTS.LAST_SPARK_HP);
+        this.invulnTimer = Math.max(this.invulnTimer, 1.5);
+        showFloatingText(this, this.playerX, this.playerY - 34, 'Последняя искра!', '#fbbf24');
+        return;
+      }
+
       this.triggerGameOver();
     }
   }
@@ -2049,6 +2091,7 @@ export class GameScene extends Phaser.Scene {
     // Дар мастерства выдаётся до восстановления HP: «Стойкость» сразу
     // повышает максимум, и запас заполняется уже с учётом бонуса.
     this.boons.clear();
+    this.lastSparkUsed = false;
     this.grantMasteryBoon();
 
     this.hp = this.maxHp;
@@ -2315,7 +2358,22 @@ export class GameScene extends Phaser.Scene {
 
   /** Применяет свойства текущей фазы: радиус света и свечение вокруг игрока. */
   private applyCurrentPhase(): void {
-    const baseRadius = PHASES[this.currentPhase].lightRadius * this.lightMultiplier;
+    const clearSight = this.boons.has('CLEAR_SIGHT')
+      ? BOON_EFFECTS.CLEAR_SIGHT_LIGHT_MULTIPLIER
+      : 1;
+
+    let baseRadius = PHASES[this.currentPhase].lightRadius;
+
+    // «Вечный факел» не даёт тьме отнять больше четверти света.
+    if (this.currentPhase === 'DARK' && this.boons.has('ETERNAL_TORCH')) {
+      baseRadius = Math.max(
+        baseRadius,
+        PHASES.LIGHT.lightRadius * BOON_EFFECTS.ETERNAL_TORCH_MIN_LIGHT
+      );
+    }
+
+    baseRadius *= this.lightMultiplier * clearSight;
+
     const drainRadius = this.getActiveDrainRadius();
     const radius = this.torchDrainTimer > 0 && drainRadius !== null
       ? Math.min(baseRadius, drainRadius)

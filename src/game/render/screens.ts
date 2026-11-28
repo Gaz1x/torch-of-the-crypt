@@ -9,7 +9,7 @@ import {
 } from '../core/profile';
 import { DEFAULT_SETTINGS, type GameSettings } from '../core/settings';
 import { track } from '../core/analytics';
-import type { BoonDefinition, BoonKey } from '../core/boons';
+import type { BoonDefinition, BoonKey, BoonRarity } from '../core/boons';
 import {
   getUpgradeCost,
   getUpgradeMaxLevel,
@@ -56,6 +56,7 @@ import {
   spawnEmbers,
   UI_COLORS,
   UI_FONT,
+  type IconKind,
 } from './uiKit';
 
 // ============================================================================
@@ -1461,7 +1462,7 @@ function createGuardBookModal(
     animate: false,
   });
   previewVisual.shadow.destroy();
-  previewVisual.container.setScale(3.2).setRotation(-0.18);
+  previewVisual.container.setScale(3.2).setRotation(-0.08);
   previewHolder.add(previewVisual.container);
 
   const previewName = scene.add.text(390, 520, '', {
@@ -1889,7 +1890,7 @@ export function drawStartScreen(
   };
 
   // --------------------------------------------------------- СПУСК ДНЯ
-  // Справа от логотипа, в свободной зоне стены: карточка не закрывает
+  // Компактная карточка над колонкой меню: не закрывает логотип,
   // центральную арку, костёр и сидящего стража.
   const dailyProfile = profileController.getProfile();
   const dailyKey = getDailyKey();
@@ -1899,11 +1900,11 @@ export function drawStartScreen(
   const dailyLevelName = LEVELS[dailyRun.levelIndex]?.name ?? '';
   const dailyTrialNames = dailyRun.trials.map((key) => TRIALS[key].name).join(' · ');
 
-  const dailyPanel = createPanel(scene, 540, 56, 290, 120, UI_COLORS.mana, {
+  const dailyPanel = createPanel(scene, 840, 16, 320, 124, UI_COLORS.mana, {
     alpha: 0.96,
   });
 
-  const dailyHeader = scene.add.text(556, 70, `СПУСК ДНЯ · ${formatDailyKey(dailyKey)}`, {
+  const dailyHeader = scene.add.text(856, 32, `СПУСК ДНЯ · ${formatDailyKey(dailyKey)}`, {
     fontFamily: UI_FONT.body,
     fontSize: '9px',
     fontStyle: 'bold',
@@ -1911,7 +1912,7 @@ export function drawStartScreen(
     letterSpacing: 1,
   }).setOrigin(0, 0.5);
 
-  const dailyReward = scene.add.text(814, 70, `ЭХО ×${DAILY_ECHO_BONUS.toFixed(1)}`, {
+  const dailyReward = scene.add.text(1144, 32, `ЭХО ×${DAILY_ECHO_BONUS.toFixed(1)}`, {
     fontFamily: UI_FONT.mono,
     fontSize: '10px',
     fontStyle: 'bold',
@@ -1919,8 +1920,8 @@ export function drawStartScreen(
   }).setOrigin(1, 0.5);
 
   const dailyLocation = scene.add.text(
-    556,
-    88,
+    856,
+    50,
     `ЛОКАЦИЯ ${dailyRoman} · ${dailyLevelName.toUpperCase()}`,
     {
       fontFamily: UI_FONT.body,
@@ -1931,17 +1932,17 @@ export function drawStartScreen(
     }
   ).setOrigin(0, 0.5);
 
-  const dailyTrials = scene.add.text(556, 104, `ИСПЫТАНИЯ · ${dailyTrialNames}`, {
+  const dailyTrials = scene.add.text(856, 68, `ИСПЫТАНИЯ · ${dailyTrialNames}`, {
     fontFamily: UI_FONT.body,
     fontSize: '8px',
     color: '#c3cedd',
     letterSpacing: 0.3,
-    wordWrap: { width: 258 },
+    wordWrap: { width: 288 },
   }).setOrigin(0, 0.5);
 
   const dailyStatus = scene.add.text(
-    556,
-    120,
+    856,
+    88,
     dailyUsed
       ? dailyProfile.daily.bestRank
         ? `ИСПОЛЬЗОВАНА · ЛУЧШИЙ РЕЗУЛЬТАТ ${dailyProfile.daily.bestRank} · ${formatNumber(dailyProfile.daily.bestScore)}`
@@ -1953,10 +1954,11 @@ export function drawStartScreen(
       fontStyle: 'bold',
       color: dailyUsed ? '#8b9bb0' : '#7dd3fc',
       letterSpacing: 0.3,
+      wordWrap: { width: 288 },
     }
   ).setOrigin(0, 0.5);
 
-  const dailyButton = createButton(scene, 685, 150, 258, 30, dailyUsed ? 'ЗАВТРА' : 'НАЧАТЬ', {
+  const dailyButton = createButton(scene, 1000, 116, 288, 26, dailyUsed ? 'ЗАВТРА' : 'НАЧАТЬ', {
     variant: dailyUsed ? 'ghost' : 'primary',
     accent: UI_COLORS.mana,
     accentHex: '#e0f2fe',
@@ -2606,11 +2608,30 @@ export function drawPauseScreen(
 // ДАРЫ ЭТАЖА
 // ============================================================================
 
-const BOON_ICONS: Record<BoonKey, 'bolt' | 'aim' | 'crystal' | 'banner'> = {
+const BOON_ICONS: Record<BoonKey, IconKind> = {
   RAPID_FIRE: 'bolt',
-  DOUBLE_SHOT: 'aim',
-  PIERCE: 'crystal',
   VITALITY: 'banner',
+  LIGHT_STEP: 'move',
+  CLEAR_SIGHT: 'torch',
+  QUIET_FLAME: 'flame',
+  WIDE_GATHER: 'crystal',
+  DOUBLE_SHOT: 'aim',
+  PIERCE: 'star',
+  HOT_SHOT: 'flame',
+  SECOND_WIND: 'clock',
+  CRYPT_HEART: 'banner',
+  LAST_SPARK: 'skull',
+  ETERNAL_TORCH: 'torch',
+};
+
+/** Цвет рамки, подпись и свечение карточки зависят от редкости дара. */
+const BOON_RARITY_STYLES: Record<
+  BoonRarity,
+  { label: string; accent: number; hex: string; glow: boolean }
+> = {
+  COMMON: { label: 'ОБЫЧНЫЙ', accent: UI_COLORS.brass, hex: '#f0c674', glow: false },
+  RARE: { label: 'РЕДКИЙ', accent: UI_COLORS.mana, hex: '#7dd3fc', glow: false },
+  LEGENDARY: { label: 'ЛЕГЕНДАРНЫЙ', accent: UI_COLORS.ember, hex: '#fb923c', glow: true },
 };
 
 /** Модалка выбора дара после этажа. Игра стоит, пока игрок не выберет. */
@@ -2682,31 +2703,42 @@ export function showBoonChoice(
   choices.forEach((choice, index) => {
     const x = startX + index * (cardWidth + gap);
     const y = 228;
+    const style = BOON_RARITY_STYLES[choice.rarity];
 
     const cardContainer = scene.add.container(x, y);
     overlay.add(cardContainer);
 
-    const card = createPanel(scene, 0, 0, cardWidth, 300, UI_COLORS.brass);
+    const card = createPanel(scene, 0, 0, cardWidth, 300, style.accent, {
+      glow: style.glow,
+    });
+    const rarity = scene.add.text(cardWidth / 2, 18, style.label, {
+      fontFamily: UI_FONT.body,
+      fontSize: '8px',
+      fontStyle: 'bold',
+      color: style.hex,
+      letterSpacing: 1.5,
+    }).setOrigin(0.5);
+
     const icon = createIcon(
       scene,
       cardWidth / 2,
       46,
       BOON_ICONS[choice.key],
       28,
-      UI_COLORS.emberBright
+      style.accent
     );
-    const name = scene.add.text(cardWidth / 2, 86, choice.name, {
+    const name = scene.add.text(cardWidth / 2, 78, choice.name, {
       fontFamily: UI_FONT.display,
-      fontSize: '17px',
+      fontSize: '15px',
       fontStyle: 'bold',
-      color: '#f0c674',
+      color: choice.rarity === 'LEGENDARY' ? '#fde68a' : '#f0c674',
       align: 'center',
       wordWrap: { width: cardWidth - 36 },
     }).setOrigin(0.5, 0);
 
-    const cardDivider = createDivider(scene, cardWidth / 2, 120, cardWidth - 60, UI_COLORS.brass);
+    const cardDivider = createDivider(scene, cardWidth / 2, 112, cardWidth - 60, style.accent);
 
-    const description = scene.add.text(22, 140, choice.description, {
+    const description = scene.add.text(22, 130, choice.description, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       color: '#c3cedd',
@@ -2714,11 +2746,11 @@ export function showBoonChoice(
       wordWrap: { width: cardWidth - 44 },
     });
 
-    const effect = scene.add.text(22, 212, choice.effect, {
+    const effect = scene.add.text(22, 206, choice.effect, {
       fontFamily: UI_FONT.body,
       fontSize: '12px',
       fontStyle: 'bold',
-      color: '#7dd3fc',
+      color: style.hex,
       wordWrap: { width: cardWidth - 44 },
     });
 
@@ -2730,7 +2762,16 @@ export function showBoonChoice(
       fontSize: 13,
     });
 
-    cardContainer.add([card, icon, name, cardDivider, description, effect, pickButton.container]);
+    cardContainer.add([
+      card,
+      rarity,
+      icon,
+      name,
+      cardDivider,
+      description,
+      effect,
+      pickButton.container,
+    ]);
 
     // Карточки выезжают снизу по очереди — окно «раскрывается».
     cardContainer.setAlpha(0);

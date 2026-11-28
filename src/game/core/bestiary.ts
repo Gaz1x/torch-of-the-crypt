@@ -26,6 +26,8 @@ const ENEMY_ROLES: Record<EnemyTypeKey, string> = {
   BOMBER: 'Подходит и взрывается',
   HOUND: 'Быстрая и злая',
   WATCHER: 'Стреляет из темноты',
+  DROWNED: 'Идёт напролом сквозь воду',
+  ASH_PRIEST: 'Бьёт пеплом издалека',
   ELITE_STALKER: 'Быстрый и упрямый',
   ELITE_BRUTE: 'Костяная гора',
   ELITE_BOMBER: 'Взрыв по площади',
@@ -35,6 +37,8 @@ const BOSS_ROLES: Record<BossTypeKey, string> = {
   FLAME_EATER: 'Гасит факел и бьёт рывком',
   PALE_WARDEN: 'Держит дистанцию, бьёт веером',
   ROT_MOTHER: 'Зовёт свиту из трещин',
+  DROWNED_KING: 'Топит свет широким веером',
+  ASH_LORD: 'Поднимает пепельных жрецов',
 };
 
 export const BESTIARY_ENTRIES: BestiaryEntry[] = [

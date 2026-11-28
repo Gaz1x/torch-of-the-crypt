@@ -6,7 +6,12 @@ import type { EnemyConfig, EnemyTypeKey } from './gameConfig';
 // ярость) живёт в GameScene и выбирается по полю mechanic.
 // ============================================================================
 
-export type BossTypeKey = 'FLAME_EATER' | 'PALE_WARDEN' | 'ROT_MOTHER';
+export type BossTypeKey =
+  | 'FLAME_EATER'
+  | 'PALE_WARDEN'
+  | 'ROT_MOTHER'
+  | 'DROWNED_KING'
+  | 'ASH_LORD';
 
 /** Какой набор атак использует босс. */
 export type BossMechanic = 'CHARGER' | 'SHOOTER' | 'SUMMONER';
@@ -115,5 +120,46 @@ export const BOSS_CONFIG: Record<BossTypeKey, BossConfig> = {
     summonCount: 2,
     summonType: 'HOUND',
     enrageThreshold: 0.55,
+  },
+  DROWNED_KING: {
+    name: 'Король-утопленник',
+    behavior: 'BOSS',
+    mechanic: 'SHOOTER',
+    hp: 72,
+    speed: 54,
+    lightSlowFactor: 0.7,
+    radius: 46,
+    bodyColor: 0x041c26,
+    strokeColor: 0x0e7490,
+    lightStrokeColor: 0x67e8f9,
+    eyeColor: 0x22d3ee,
+    scoreValue: 120,
+    manaDrop: 130,
+    contactDamage: 1,
+    shotCooldown: 2.2,
+    shotCount: 7,
+    shotSpread: 0.95,
+    shotSpeed: 280,
+    enrageThreshold: 0.45,
+  },
+  ASH_LORD: {
+    name: 'Пепельный Владыка',
+    behavior: 'BOSS',
+    mechanic: 'SUMMONER',
+    hp: 88,
+    speed: 48,
+    lightSlowFactor: 0.7,
+    radius: 48,
+    bodyColor: 0x1a0b06,
+    strokeColor: 0x9a3412,
+    lightStrokeColor: 0xfbbf24,
+    eyeColor: 0xfde68a,
+    scoreValue: 140,
+    manaDrop: 150,
+    contactDamage: 1,
+    summonInterval: 5,
+    summonCount: 2,
+    summonType: 'ASH_PRIEST',
+    enrageThreshold: 0.5,
   },
 };

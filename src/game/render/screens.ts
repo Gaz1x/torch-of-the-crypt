@@ -65,6 +65,7 @@ import {
 // ============================================================================
 
 const FLOOR_ROMAN = ['I', 'II', 'III'] as const;
+const LEVEL_ROMAN = ['I', 'II', 'III', 'IV', 'V'] as const;
 
 /** На сенсорных экранах подсказки про клавиши заменяются на жесты. */
 export function isTouchUi(): boolean {
@@ -1269,11 +1270,11 @@ function createGuardBookModal(
   }).setOrigin(1, 0);
 
   const bestiaryCards = BESTIARY_ENTRIES.map((entry, index) => {
-    const column = index % 4;
-    const row = Math.floor(index / 4);
-    const card = scene.add.container(317 + column * 215, 198 + row * 100);
-    const cardPanel = createPanel(scene, -102, 0, 204, 92, 0x4b5d77, { alpha: 0.95 });
-    const artHolder = scene.add.container(0, 30);
+    const column = index % 5;
+    const row = Math.floor(index / 5);
+    const card = scene.add.container(290 + column * 175, 198 + row * 100);
+    const cardPanel = createPanel(scene, -80, 0, 160, 92, 0x4b5d77, { alpha: 0.95 });
+    const artHolder = scene.add.container(0, 28);
 
     const isBoss = entry.kind === 'boss';
     const radius = isBoss
@@ -1294,7 +1295,7 @@ function createGuardBookModal(
           0,
           0
         );
-    visual.container.setScale(Math.min(1.6, 24 / radius));
+    visual.container.setScale(Math.min(1.5, 22 / radius));
     freezeVisual(visual.container);
     // Полоски здоровья живут отдельно от контейнера и в книге не нужны.
     visual.hpBar?.destroy();
@@ -1303,17 +1304,17 @@ function createGuardBookModal(
 
     const name = scene.add.text(0, 58, entry.name, {
       fontFamily: UI_FONT.body,
-      fontSize: '10px',
+      fontSize: '9px',
       fontStyle: 'bold',
       color: '#7c8ba1',
-      letterSpacing: 0.5,
+      letterSpacing: 0.3,
     }).setOrigin(0.5);
-    const role = scene.add.text(0, 73, entry.role, {
+    const role = scene.add.text(0, 72, entry.role, {
       fontFamily: UI_FONT.body,
-      fontSize: '8px',
+      fontSize: '7px',
       color: '#64748b',
     }).setOrigin(0.5);
-    const count = scene.add.text(94, 8, '', {
+    const count = scene.add.text(72, 8, '', {
       fontFamily: UI_FONT.mono,
       fontSize: '9px',
       fontStyle: 'bold',
@@ -1358,24 +1359,26 @@ function createGuardBookModal(
     }
   );
 
+  // Пять локаций должны поместиться в окно без прокрутки: строки ниже,
+  // а чипы ступеней — в одну компактную полосу.
   const masteryRows = LEVELS.map((level, index) => {
-    const card = scene.add.container(0, 200 + index * 126);
-    const cardPanel = createPanel(scene, 210, 0, 860, 114, 0x4b5d77, { alpha: 0.95 });
+    const card = scene.add.container(0, 200 + index * 80);
+    const cardPanel = createPanel(scene, 210, 0, 860, 72, 0x4b5d77, { alpha: 0.95 });
     const name = scene.add.text(
       230,
-      14,
-      `ЛОКАЦИЯ ${FLOOR_ROMAN[index] ?? index + 1} · ${level.name.toUpperCase()}`,
+      8,
+      `ЛОКАЦИЯ ${LEVEL_ROMAN[index] ?? index + 1} · ${level.name.toUpperCase()}`,
       {
         fontFamily: UI_FONT.display,
-        fontSize: '14px',
+        fontSize: '13px',
         fontStyle: 'bold',
         color: '#f0c674',
         letterSpacing: 1,
       }
     );
-    const wins = scene.add.text(1050, 18, '', {
+    const wins = scene.add.text(1050, 10, '', {
       fontFamily: UI_FONT.mono,
-      fontSize: '10px',
+      fontSize: '9px',
       fontStyle: 'bold',
       color: '#c3cedd',
     }).setOrigin(1, 0);
@@ -1384,26 +1387,28 @@ function createGuardBookModal(
     card.add([cardPanel, name, wins]);
 
     const steps = MASTERY_STEPS.map((step, stepIndex) => {
-      const chip = scene.add.container(230 + stepIndex * 284, 74);
+      const chip = scene.add.container(230 + stepIndex * 284, 52);
+      // Левый край чипа совпадает с отступом строки, иначе он торчит из панели.
       const bg = scene.add
-        .rectangle(0, 0, 272, 60, 0x0f1626, 0.92)
+        .rectangle(0, 0, 272, 34, 0x0f1626, 0.92)
+        .setOrigin(0, 0.5)
         .setStrokeStyle(1, UI_COLORS.panelLine, 0.8);
-      const stepTitle = scene.add.text(10, 8, step.title, {
+      const stepTitle = scene.add.text(10, -14, step.title, {
         fontFamily: UI_FONT.body,
-        fontSize: '9px',
+        fontSize: '8px',
         fontStyle: 'bold',
         color: '#7c8ba1',
         letterSpacing: 1,
       });
-      const effect = scene.add.text(10, 24, step.effect, {
+      const effect = scene.add.text(10, -2, step.effect, {
         fontFamily: UI_FONT.body,
-        fontSize: '8px',
+        fontSize: '7px',
         color: '#64748b',
         wordWrap: { width: 198 },
       });
-      const progress = scene.add.text(126, 8, '', {
+      const progress = scene.add.text(262, -14, '', {
         fontFamily: UI_FONT.mono,
-        fontSize: '9px',
+        fontSize: '8px',
         fontStyle: 'bold',
         color: '#64748b',
       }).setOrigin(1, 0);
@@ -1797,7 +1802,7 @@ export function drawStartScreen(
 
   const renderLevel = (): void => {
     const unlocked = selectedLevel < levelSelect.unlocked;
-    const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
+    const roman = LEVEL_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
     const name = levelSelect.levels[selectedLevel] ?? '';
     levelLabel.setText(
       unlocked ? `ЛОКАЦИЯ ${roman} · ${name.toUpperCase()}` : `ЛОКАЦИЯ ${roman} · ЗАКРЫТО`
@@ -1888,7 +1893,7 @@ export function drawStartScreen(
   const dailyKey = getDailyKey();
   const dailyRun = getDailyRun(dailyKey, dailyProfile.unlockedLevels);
   const dailyUsed = dailyProfile.daily.key === dailyKey && dailyProfile.daily.used;
-  const dailyRoman = FLOOR_ROMAN[dailyRun.levelIndex] ?? `${dailyRun.levelIndex + 1}`;
+  const dailyRoman = LEVEL_ROMAN[dailyRun.levelIndex] ?? `${dailyRun.levelIndex + 1}`;
   const dailyLevelName = LEVELS[dailyRun.levelIndex]?.name ?? '';
   const dailyTrialNames = dailyRun.trials.map((key) => TRIALS[key].name).join(' · ');
 
@@ -2072,7 +2077,7 @@ export function drawStartScreen(
   const refreshStats = (): void => {
     const profile = profileController.getProfile();
     const levelStats = profile.levelStats[selectedLevel] ?? profile.levelStats[0];
-    const roman = FLOOR_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
+    const roman = LEVEL_ROMAN[selectedLevel] ?? `${selectedLevel + 1}`;
     const mastery = getMastery(levelStats.victories);
 
     statsHeader.setText(`ХРОНИКА · ЛОКАЦИЯ ${roman}`);
@@ -2333,7 +2338,7 @@ function drawResultScreen(
     140,
     stats.newlyUnlockedLevel !== null
       ? `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled} · Открыта локация ${
-          FLOOR_ROMAN[stats.newlyUnlockedLevel - 1] ?? stats.newlyUnlockedLevel
+          LEVEL_ROMAN[stats.newlyUnlockedLevel - 1] ?? stats.newlyUnlockedLevel
         }`
       : `Собрано эфира: ${stats.manaCollected} · Боссов повержено: ${stats.bossesKilled}`,
     {

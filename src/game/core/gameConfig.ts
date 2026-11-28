@@ -10,6 +10,8 @@ export type EnemyTypeKey =
   | 'BOMBER'
   | 'HOUND'
   | 'WATCHER'
+  | 'DROWNED'
+  | 'ASH_PRIEST'
   | 'ELITE_STALKER'
   | 'ELITE_BRUTE'
   | 'ELITE_BOMBER';
@@ -199,6 +201,39 @@ export const GAME_CONFIG = {
       attackRange: 380,
       attackCooldown: 2.6,
       projectileSpeed: 280,
+    },
+
+    // --- Новые типы четвёртой и пятой локаций ---
+    DROWNED: {
+      name: 'Утопленник',
+      behavior: 'CHASER',
+      hp: 4,
+      speed: 105,
+      lightSlowFactor: 0.45,
+      radius: 19,
+      bodyColor: 0x08202a,
+      strokeColor: 0x0e7490,
+      lightStrokeColor: 0x67e8f9,
+      eyeColor: 0xa5f3fc,
+      scoreValue: 7,
+      manaDrop: 32,
+    },
+    ASH_PRIEST: {
+      name: 'Пепельный жрец',
+      behavior: 'RANGED',
+      hp: 3,
+      speed: 105,
+      lightSlowFactor: 0.5,
+      radius: 16,
+      bodyColor: 0x1c1008,
+      strokeColor: 0xb45309,
+      lightStrokeColor: 0xfcd34d,
+      eyeColor: 0xfde68a,
+      scoreValue: 7,
+      manaDrop: 30,
+      attackRange: 360,
+      attackCooldown: 2,
+      projectileSpeed: 300,
     },
 
     // --- Элитные версии: тот же силуэт, другие статы и палитра ---

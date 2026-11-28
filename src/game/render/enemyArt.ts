@@ -19,6 +19,15 @@ export interface EnemyVisual {
 /** Глубина полосок: выше тел врагов, но ниже игрока. */
 const HP_BAR_DEPTH = 10;
 
+/**
+ * Новые враги используют силуэты уже нарисованных типов: так локации
+ * получают свой облик без второй копии каждой фигуры.
+ */
+const VISUAL_BASE: Partial<Record<EnemyTypeKey, EnemyTypeKey>> = {
+  DROWNED: 'WATCHER',
+  ASH_PRIEST: 'SPITTER',
+};
+
 interface Eye {
   eye: Phaser.GameObjects.Arc;
   halo: Phaser.GameObjects.Arc;
@@ -79,7 +88,10 @@ export function createEnemyVisual(
   let hpBarBack: Phaser.GameObjects.Rectangle | undefined;
 
   // Элиты носят то же тело, что и базовый тип: ELITE_BRUTE → BRUTE.
-  const baseType = (type.startsWith('ELITE_') ? type.slice('ELITE_'.length) : type) as EnemyTypeKey;
+  const strippedType = (
+    type.startsWith('ELITE_') ? type.slice('ELITE_'.length) : type
+  ) as EnemyTypeKey;
+  const baseType = VISUAL_BASE[type] ?? strippedType;
 
   switch (baseType) {
     case 'HOUND': {

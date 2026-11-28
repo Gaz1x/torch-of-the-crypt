@@ -382,13 +382,205 @@ export const LEVELS: LevelConfig[] = [
       },
     ],
   },
+
+  // --------------------------------------------------------- ЛОКАЦИЯ IV
+  {
+    name: 'Затонувшая цитадель',
+    floors: [
+      { name: 'Затонувшие залы', lastWave: 2 },
+      { name: 'Затопленный алтарь', lastWave: 5 },
+      { name: 'Трон под водой', lastWave: 8 },
+    ],
+    waves: [
+      {
+        name: 'Холодная вода',
+        spawnCount: 15,
+        spawnInterval: 1.2,
+        maxAlive: 9,
+        guaranteed: ['DROWNED'],
+        weights: { HOUND: 45, WATCHER: 35, DROWNED: 20 },
+      },
+      {
+        name: 'Пузыри',
+        spawnCount: 16,
+        spawnInterval: 1.1,
+        maxAlive: 9,
+        guaranteed: ['DROWNED', 'DROWNED'],
+        weights: { HOUND: 35, WATCHER: 25, DROWNED: 40 },
+      },
+      {
+        name: 'Течение',
+        spawnCount: 17,
+        spawnInterval: 1,
+        maxAlive: 10,
+        guaranteed: ['ELITE_STALKER'],
+        weights: { HOUND: 30, WATCHER: 25, SPITTER: 20, DROWNED: 25 },
+      },
+      {
+        name: 'Затонувший хор',
+        spawnCount: 17,
+        spawnInterval: 0.95,
+        maxAlive: 10,
+        guaranteed: ['DROWNED', 'WATCHER'],
+        weights: { HOUND: 25, WATCHER: 30, DROWNED: 30, ELITE_STALKER: 15 },
+      },
+      {
+        name: 'Тихий прилив',
+        spawnCount: 18,
+        spawnInterval: 0.9,
+        maxAlive: 11,
+        guaranteed: ['ELITE_BOMBER'],
+        weights: { HOUND: 25, DROWNED: 30, WATCHER: 20, ELITE_BOMBER: 25 },
+      },
+      {
+        name: 'Глубина',
+        spawnCount: 18,
+        spawnInterval: 0.85,
+        maxAlive: 11,
+        guaranteed: ['ELITE_BRUTE', 'DROWNED'],
+        weights: { DROWNED: 30, ELITE_STALKER: 20, WATCHER: 20, ELITE_BRUTE: 30 },
+      },
+      {
+        name: 'Водяные стены',
+        spawnCount: 19,
+        spawnInterval: 0.8,
+        maxAlive: 12,
+        guaranteed: ['DROWNED', 'DROWNED', 'WATCHER'],
+        weights: { DROWNED: 35, WATCHER: 25, ELITE_BOMBER: 20, ELITE_STALKER: 20 },
+      },
+      {
+        name: 'Последний вдох',
+        spawnCount: 20,
+        spawnInterval: 0.75,
+        maxAlive: 12,
+        guaranteed: ['ELITE_BRUTE', 'ELITE_STALKER', 'ELITE_BOMBER'],
+        weights: {
+          DROWNED: 30,
+          WATCHER: 20,
+          ELITE_STALKER: 20,
+          ELITE_BRUTE: 15,
+          ELITE_BOMBER: 15,
+        },
+      },
+      {
+        name: 'Король-утопленник',
+        spawnCount: 0,
+        spawnInterval: 1,
+        maxAlive: 0,
+        boss: 'DROWNED_KING',
+        escorts: [{ type: 'DROWNED', count: 2 }],
+        adds: {
+          startDelay: 2,
+          spawnInterval: 3,
+          maxAlive: 5,
+          weights: { DROWNED: 45, WATCHER: 35, HOUND: 20 },
+        },
+      },
+    ],
+  },
+
+  // ---------------------------------------------------------- ЛОКАЦИЯ V
+  {
+    name: 'Пепельный престол',
+    floors: [
+      { name: 'Пепельные ступени', lastWave: 2 },
+      { name: 'Костёр жертв', lastWave: 5 },
+      { name: 'Престол пепла', lastWave: 8 },
+    ],
+    waves: [
+      {
+        name: 'Тёплый пепел',
+        spawnCount: 16,
+        spawnInterval: 1.15,
+        maxAlive: 10,
+        guaranteed: ['ASH_PRIEST'],
+        weights: { HOUND: 40, ASH_PRIEST: 30, ELITE_STALKER: 30 },
+      },
+      {
+        name: 'Искры',
+        spawnCount: 17,
+        spawnInterval: 1.05,
+        maxAlive: 10,
+        guaranteed: ['ELITE_BOMBER', 'ASH_PRIEST'],
+        weights: { HOUND: 30, ASH_PRIEST: 30, ELITE_BOMBER: 25, ELITE_STALKER: 15 },
+      },
+      {
+        name: 'Жар',
+        spawnCount: 18,
+        spawnInterval: 1,
+        maxAlive: 11,
+        guaranteed: ['ELITE_BRUTE'],
+        weights: { ASH_PRIEST: 30, ELITE_STALKER: 25, ELITE_BRUTE: 25, HOUND: 20 },
+      },
+      {
+        name: 'Пепельный хор',
+        spawnCount: 18,
+        spawnInterval: 0.95,
+        maxAlive: 11,
+        guaranteed: ['ASH_PRIEST', 'ASH_PRIEST'],
+        weights: { ASH_PRIEST: 40, ELITE_BOMBER: 20, WATCHER: 20, HOUND: 20 },
+      },
+      {
+        name: 'Плавильня',
+        spawnCount: 19,
+        spawnInterval: 0.9,
+        maxAlive: 12,
+        guaranteed: ['ELITE_BRUTE', 'ELITE_BOMBER'],
+        weights: { ELITE_BRUTE: 30, ASH_PRIEST: 25, ELITE_BOMBER: 25, ELITE_STALKER: 20 },
+      },
+      {
+        name: 'Огненный дождь',
+        spawnCount: 19,
+        spawnInterval: 0.85,
+        maxAlive: 12,
+        guaranteed: ['ELITE_BOMBER', 'ELITE_BOMBER'],
+        weights: { ASH_PRIEST: 30, ELITE_BOMBER: 30, ELITE_STALKER: 20, ELITE_BRUTE: 20 },
+      },
+      {
+        name: 'Стены жара',
+        spawnCount: 20,
+        spawnInterval: 0.8,
+        maxAlive: 13,
+        guaranteed: ['ELITE_BRUTE', 'ASH_PRIEST'],
+        weights: { ELITE_BRUTE: 30, ASH_PRIEST: 30, ELITE_STALKER: 20, ELITE_BOMBER: 20 },
+      },
+      {
+        name: 'Последний уголь',
+        spawnCount: 21,
+        spawnInterval: 0.75,
+        maxAlive: 13,
+        guaranteed: ['ELITE_STALKER', 'ELITE_BRUTE', 'ELITE_BOMBER'],
+        weights: {
+          ASH_PRIEST: 30,
+          ELITE_STALKER: 20,
+          ELITE_BRUTE: 20,
+          ELITE_BOMBER: 20,
+          HOUND: 10,
+        },
+      },
+      {
+        name: 'Пепельный Владыка',
+        spawnCount: 0,
+        spawnInterval: 1,
+        maxAlive: 0,
+        boss: 'ASH_LORD',
+        escorts: [{ type: 'ASH_PRIEST', count: 2 }],
+        adds: {
+          startDelay: 1.5,
+          spawnInterval: 2.8,
+          maxAlive: 5,
+          weights: { ASH_PRIEST: 45, HOUND: 30, ELITE_STALKER: 25 },
+        },
+      },
+    ],
+  },
 ];
 
 /**
  * Множитель Эха за спуск: поздние локации опаснее и платят больше.
  * Индекс совпадает с LEVELS; для будущих локаций берётся последнее значение.
  */
-export const LEVEL_ECHO_MULTIPLIERS = [1, 1.2, 1.45] as const;
+export const LEVEL_ECHO_MULTIPLIERS = [1, 1.2, 1.45, 1.75, 2.1] as const;
 
 export function getLevelEchoMultiplier(levelIndex: number): number {
   const index = Math.min(
